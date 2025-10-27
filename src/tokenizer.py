@@ -24,13 +24,9 @@ Design principles:
 import re
 from typing import List, Iterable, Optional
 
-# ------------------------------------------------------------
-# Here we are defining a small but representative STOPWORD list.
-# These are common English words that typically don't help in retrieval,
-# since they occur in nearly all documents.
-# ------------------------------------------------------------
+
 _DEFAULT_STOPWORDS = {
-    "a", "an", "the", "and", "or", "not", "in", "on", "at", "for", "of", "to",
+    "an", "the", "and", "or", "not", "in", "on", "at", "for", "of", "to",
     "is", "are", "was", "were", "be", "been", "being", "it", "this", "that",
     "these", "those", "as", "by", "with", "from", "but", "if", "then", "else",
     "when", "while", "which", "who", "whom", "what", "where", "why", "how",
@@ -39,12 +35,7 @@ _DEFAULT_STOPWORDS = {
     "can", "will", "just", "about", "into", "through"
 }
 
-# ------------------------------------------------------------
-# Here we are trying to import an optional stemmer (PorterStemmer).
-# If available, it helps to reduce words to their "root" form.
-# Example: "running", "runs", "ran" -> "run"
-# If not available, we simply skip this functionality gracefully.
-# ------------------------------------------------------------
+# Import stemming if available
 try:
     from nltk.stem.porter import PorterStemmer  # type: ignore
     _HAS_PORTER = True
@@ -76,31 +67,21 @@ class Tokenizer:
             Whether to apply stemming using Porter Stemmer.
     """
     def __init__(self, stopwords: Optional[Iterable[str]] = None, use_stemmer: bool = False):
-        # Here we are setting the stopwords.
-        # If the user provides a custom list, we convert it to a set.
-        # Otherwise, we use the default list defined above.
         self.stopwords = set(stopwords) if stopwords is not None else _DEFAULT_STOPWORDS
 
-        # Here we are compiling a regular expression pattern to detect tokens.
-        # The pattern \b[0-9A-Za-z']+\b means:
-        #   - \b: word boundary
-        #   - [0-9A-Za-z']+: one or more alphanumeric characters or apostrophes
-        #   - \b: word boundary
-        self._token_re = re.compile(r"\b[0-9A-Za-z']+\b", flags=re.UNICODE)
+        # Detect tokens using regex patterns.
+        # Tokens consists of letters, digits, apostrophes and hyphens
+        self._token_re = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*", flags=re.UNICODE)
 
-        # Here we are enabling or disabling stemming functionality.
+        # Enable or disable stemming functionality
         self.use_stemmer = use_stemmer
         if self.use_stemmer:
-            # If stemming requested but nltk is missing, raise an explicit error.
             if not _HAS_PORTER:
                 raise ImportError("PorterStemmer requested but nltk not installed.")
-            # Otherwise, instantiate the stemmer.
             self.stemmer = PorterStemmer()
 
-    # ------------------------------------------------------------
-    # Core method: tokenize(text)
-    # ------------------------------------------------------------
-    def tokenize(self, text: Optional[str]) -> List[str]:
+
+    def tokenize(self, text: str) -> List[str]:
         """
         Tokenize an input string into normalized tokens.
 
@@ -110,12 +91,15 @@ class Tokenizer:
           3. Filter out:
                - Numeric-only tokens
                - Stopwords
+               - HTML blocks
+               - URLs
+               - 1 character tokens
           4. Apply stemming if requested
           5. Return the final clean list of tokens
 
         Parameters
         ----------
-        text : Optional[str]
+        text : str
             The raw text (document body or query string).
 
         Returns
@@ -123,22 +107,27 @@ class Tokenizer:
         List[str]
             A list of cleaned, normalized tokens ready for indexing or querying.
         """
-        # Step 1: handle None input safely.
         if text is None:
             return []
 
-        # Step 2: convert to lowercase to make search case-insensitive.
         text = str(text).lower()
+        text = re.compile(r"<[^>]+>").sub(" ", text) # html
+    
+        # remove urls starting with <protocol>://<url> or www.<url>
+        text = re.compile(r"""(?xi)
+            \b(
+                (?:https?://|ftp://|file://|mailto:|www\.)
+                [^\s<>'"]+
+            )
+        """).sub(" ", text)
 
-        # Step 3: find all tokens using our regex pattern.
         raw = self._token_re.findall(text)
 
-        # Step 4: initialize an empty list for valid tokens.
         tokens = []
-
-        # Step 5: iterate through each candidate token and clean it.
         for t in raw:
-            # Skip if the token is purely numeric (e.g. "1234").
+            if len(t) == 1:
+                continue
+
             if t.isdigit():
                 continue
 
@@ -150,8 +139,6 @@ class Tokenizer:
             if self.use_stemmer:
                 t = self.stemmer.stem(t)
 
-            # Keep the cleaned token.
             tokens.append(t)
 
-        # Step 6: return the fully processed token list.
         return tokens

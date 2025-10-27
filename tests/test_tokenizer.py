@@ -39,6 +39,17 @@ class TestTokenizer(unittest.TestCase):
         self.assertNotIn("1234", tokens)
         self.assertIn("ai", tokens)
 
+    def test_url_removal(self):
+        text = "https://www.google.com www.youtube.com/watch?v=WORD WORD"
+        tokens = self.tokenizer.tokenize(text)
+        self.assertEqual(len(tokens), 1)
+
+    def test_html_removal(self):
+        text = "<a>Hello</a> <div>World</div>"
+        tokens = self.tokenizer.tokenize(text)
+        self.assertEqual(len(tokens), 2)
+        self.assertNotIn("div", tokens)
+
     def test_stemming(self):
         # here, we are checking stemming if NLTK’s PorterStemmer is available
         try:
