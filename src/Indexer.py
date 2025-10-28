@@ -4,8 +4,6 @@ from Vocabulary import Vocabulary
 from collections import defaultdict
 from typing import Optional
 from functools import partial
-import pickle
-import gzip
 
 
 class Indexer:

@@ -2,8 +2,8 @@ class DocumentManager:
     def __init__(self):
         self.next_id = 0
         self.path_to_id = dict()
-        self.deleted_docs = set()
         self.documents = list()
+        self.deleted_docs = set()
 
     def add_document(self, filepath) -> int:
         if filepath in self.path_to_id:
@@ -25,9 +25,7 @@ class DocumentManager:
 
     def read_document(self, filepath) -> tuple[int, str]:
         doc_id = self.add_document(filepath)
-        with open(filepath, "r", encoding="utf8") as file:
-            doc_content = file.read()
-        return doc_id, doc_content
+        return doc_id, self.read_document_from_id(doc_id)
 
     def read_document_from_id(self, doc_id: int) -> str:
         with open(filepath, "r", encoding="utf8") as file:

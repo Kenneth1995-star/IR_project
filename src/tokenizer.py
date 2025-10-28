@@ -131,7 +131,6 @@ class Tokenizer:
             if t.isdigit():
                 continue
 
-            # Skip if token is a stopword.
             if t in self.stopwords:
                 continue
 
