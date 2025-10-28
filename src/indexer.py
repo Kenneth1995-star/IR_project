@@ -2,7 +2,7 @@
 """
 Indexer module for building an inverted index.
 
-Here, we are designing a highly efficient indexing component that supports:
+Indexing component that supports:
  - basic inverted index building (token → documents)
  - positional indexing (token → document → positions)
  - computation of statistical weights (TF-IDF, IDF, etc.)
@@ -21,27 +21,25 @@ from .tokenizer import Tokenizer
 
 class Indexer:
     def __init__(self, tokenizer: Optional[Tokenizer] = None, positional: bool = False, updatable: bool = False):
-        # here, we are initializing the Indexer with optional features:
-        # - tokenizer: for breaking documents into tokens
         # - positional: whether we store word positions (needed for phrase queries)
         # - updatable: whether documents can be dynamically added/removed later
         self.tokenizer = tokenizer or Tokenizer()
         self.positional = positional
         self.updatable = updatable
 
-        # here, we are defining the main internal structure for postings:
+        # Main internal structure for postings:
         # token → {doc_id: count}  or  token → {doc_id: [pos1, pos2, ...]} if positional=True
         self._postings_dict: Dict[str, Dict[str, Any]] = defaultdict(dict)
 
-        # here, we are storing a compact, sorted posting list version of the above dictionary:
-        # token → [(doc_id, freq), ...] — this helps for fast merging in boolean queries
+        # Sorted posting list version of the above dictionary for fast merging in boolean queries:
+        # token → [(doc_id, freq), ...]
         self.postings_lists: Dict[str, List[Tuple[str, int]]] = {}
 
-        # here, we are keeping the raw text and lengths of each document for ranking and snippet generation
+        # Raw text and lengths of each document for ranking and snippet generation
         self.doc_texts: Dict[str, str] = {}
         self.doc_lengths: Dict[str, int] = {}
 
-        # here, we are initializing statistical variables for ranking (computed later in build())
+        # Statistical variables for ranking
         self.N: int = 0
         self.df: Dict[str, int] = {}       # document frequency per token
         self.idf: Dict[str, float] = {}    # inverse document frequency
@@ -49,11 +47,11 @@ class Indexer:
         self.doc_norms: Dict[str, float] = {}                  # document vector norms
         self.avg_doc_len: float = 0.0
 
-        # here, we are preparing structures for optional disk-based indexing (for large datasets)
+        # Optional disk-based indexing
         self._lexicon: Optional[Dict[str, int]] = None
         self._postings_file_path: Optional[str] = None
 
-        # here, we are flagging whether the index has been built and is ready for querying
+        # Whether the index has been built and is ready for querying
         self._needs_build = True
 
     # ---------------------------------------------------------
@@ -63,24 +61,17 @@ class Indexer:
         """
         Adding a document to the indexer and update postings accordingly.
         """
-        # here, we are ensuring we don’t overwrite an existing document unless allowed
-        if doc_id in self.doc_texts and not self.updatable:
-            raise ValueError(f"Document {doc_id} already exists and indexer not updatable.")
-
-        # here, we are handling document replacement if updatable=True
         if doc_id in self.doc_texts:
+            if not self.updatable:
+                raise ValueError(f"Document {doc_id} already exists and indexer not updatable.")
             self.remove_document(doc_id)
 
-        # here, we are storing the raw document text
         self.doc_texts[doc_id] = text
-
-        # here, we are tokenizing the document into normalized tokens
         tokens = self.tokenizer.tokenize(text)
 
-        # here, we are recording the document length for BM25 normalization later
+        # For BM25 normalization later
         self.doc_lengths[doc_id] = len(tokens)
 
-        # here, we are updating the postings depending on whether we use positional indexing
         if self.positional:
             # here, we are storing positions for every token in each document
             for pos, t in enumerate(tokens):
@@ -102,14 +93,12 @@ class Indexer:
         """
         Remove a document from the index (only if updatable=True).
         """
-        # here, we are preventing removal if the index is not dynamic
-        if not self.updatable:
-            raise ValueError("Indexer not updatable.")
-        # here, we are safely exiting if document not found
         if doc_id not in self.doc_texts:
             return
 
-        # here, we are deleting the document’s stored metadata
+        if not self.updatable:
+            raise ValueError("Indexer not updatable.")
+
         del self.doc_texts[doc_id]
         del self.doc_lengths[doc_id]
 
