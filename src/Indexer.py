@@ -16,6 +16,7 @@ class Indexer:
         self.lexicon: Lexicon = Lexicon()
         self.path = path # path to index files
         self.index_file = os.path.join(self.path, "index") # final index file after merge
+        self.global_map = False
 
     def build_index_in_memory(self, filestream):
         """
@@ -35,18 +36,17 @@ class Indexer:
                     "positions": data
                 })
 
-    def build_index(self, filestream, posting_limit=5_000_000, algorithm: Literal["bsbi", "spimi"] = "spimi"):
+    def build_index(self, filestream, posting_limit=5_000_000, global_map=False):
         """
-        BSBI or SPIMI implementation for reverse indexing, storing term positions
+        SPIMI implementation for reverse indexing, storing term positions. 
         """
         block_count = 0
         posting_count = 0
 
-        # BSBI uses global term to ID mapping -> Beaucoup de memory usage, as vocabulary keeps increasing
-        # SPIMI uses term as key, no global dictionary mapping -> Beaucoup de storage usage
         def default(term: str):
             return term
-        key = default if algorithm == "spimi" else self.lexicon.get_id
+        key = self.lexicon.get_id if global_map else default
+        self.global_map = global_map
 
         # Term or TermID to Posting list, which consists of DocID to term positions
         dictionary: Dict[Any, Dict[int, List[int]]] = defaultdict(partial(defaultdict, list))
@@ -81,18 +81,22 @@ class Indexer:
     def _write_block(self, dictionary, block_id: int) -> None:
         """
         Encode block with msgpack term by term and compress with zstandard
+        Term by term writing allows for term by term reading
         """
-        filepath = os.path.join(self.path, f"block{block_id}.zst")
+        filepath = os.path.join(self.path, f"{0}-{block_id}.zst")
         with open(filepath, "wb") as f, zstd.ZstdCompressor().stream_writer(f) as zf:
             pack = msgpack.Packer().pack
+            # Sort keys
             for term_id in sorted(dictionary.keys()):
                 postings = dictionary[term_id]
-                rec = (term_id, [(doc_id, postings[doc_id]) for doc_id in sorted(postings)])
+                # Sorted by doc_id through insertion order
+                rec = (term_id, [(doc_id, postings[doc_id]) for doc_id in postings])
                 zf.write(pack(rec))
 
     def _read_block(self, filepath):
         """
-        Read a file written in _write_block, returning a generator
+        Read a file written in _write_block, returning a generator.
+        File stream reduces memory usage.
         Returns:
             (term_id, postings), postings is a list of [doc_id, positions]
         """
@@ -110,12 +114,14 @@ class Indexer:
         l_idx, r_idx = 0, 0
         out = []
 
+        # Sorted by doc_id
         ln, rn = len(l_postings), len(r_postings)
         while l_idx < ln and r_idx < rn:
             l_doc, l_positions = l_postings[l_idx]
             r_doc, r_positions = r_postings[r_idx]
 
             if l_doc == r_doc:
+                # Order of positions not guaranteed, so we sort
                 out.append([l_doc, sorted(l_positions + r_positions)])
                 l_idx += 1
                 r_idx += 1
@@ -136,11 +142,11 @@ class Indexer:
 
         return out
 
-    def _merge_blocks(self, level=0):
+    def _merge_blocks(self, level=1):
         """
         Merge blocks logarithmically
         """
-        filepaths = sorted(glob.glob(os.path.join(self.path, "*.zst")))
+        filepaths = glob.glob(os.path.join(self.path, "*.zst"))
 
         if not filepaths:
             return
@@ -148,6 +154,7 @@ class Indexer:
         if len(filepaths) == 1:
             os.rename(filepaths[0], self.index_file)
             return
+
         idx = 0
         while idx < len(filepaths) - 1:
             l_filepath = filepaths[idx]
@@ -158,10 +165,11 @@ class Indexer:
             l_content = next(l_it, None)
             r_content = next(r_it, None)
 
-            outpath = os.path.join(self.path, f"{level}-{idx}.zst")
+            outpath = os.path.join(self.path, f"{level}-{idx / 2}.zst")
             with open(outpath, "wb") as f, zstd.ZstdCompressor().stream_writer(f) as zf:
                 pack = msgpack.Packer().pack
 
+                # Keys are sorted
                 while l_content and r_content:
                     l_id, l_postings = l_content
                     r_id, r_postings = r_content
@@ -201,7 +209,7 @@ def filestream():
 if __name__ == "__main__":
     indexer = Indexer()
 
-    indexer.build_index(filestream(), posting_limit=float("inf"))
+    indexer.build_index(filestream(), posting_limit=5_000_000_000)
     gen = indexer._read_block(indexer.index_file)
     while x := next(gen, None):
         print(x)

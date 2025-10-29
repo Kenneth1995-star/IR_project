@@ -70,8 +70,8 @@ class Tokenizer:
         self.stopwords = set(stopwords) if stopwords is not None else _DEFAULT_STOPWORDS
 
         # Detect tokens using regex patterns.
-        # Tokens consists of letters, digits, apostrophes and hyphens
-        self._token_re = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*", flags=re.UNICODE)
+        # Tokens consists of letters, digits and hyphens
+        self._token_re = re.compile(r"[A-Za-z0-9]+(?:[-][A-Za-z0-9]+)*", flags=re.UNICODE)
 
         # Enable or disable stemming functionality
         self.use_stemmer = use_stemmer
