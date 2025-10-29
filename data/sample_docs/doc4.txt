@@ -1,4 +1,0 @@
-Modern medicine is rapidly evolving through innovations in biotechnology and artificial intelligence.
-AI-driven systems assist doctors in diagnosing diseases like cancer and predicting patient outcomes.
-Wearable health devices collect continuous data on heart rate, sleep, and physical activity, improving personalized healthcare.
-Machine learning algorithms help discover new drugs by analyzing complex biological datasets.

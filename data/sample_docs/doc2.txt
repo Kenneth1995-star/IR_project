@@ -1,4 +1,0 @@
-Machine learning is a subset of artificial intelligence focusing on systems that learn from data.
-Neural networks are computational models inspired by the human brain, consisting of layers of interconnected neurons.
-Deep learning, a branch of machine learning, uses multi-layer neural networks to achieve state-of-the-art performance in image and speech recognition.
-Training neural networks requires large datasets and significant computational resources.
