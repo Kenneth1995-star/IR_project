@@ -2,7 +2,7 @@ from tokenizer import Tokenizer
 from DocumentManager import DocumentManager
 from Lexicon import Lexicon
 from collections import defaultdict
-from typing import Optional, Any
+from typing import Optional, Any, Literal, Dict, List
 from functools import partial
 import msgpack, os, glob
 import zstandard as zstd
@@ -35,15 +35,21 @@ class Indexer:
                     "positions": data
                 })
 
-    def build_index_spimi(self, filestream, posting_limit=5_000):
+    def build_index(self, filestream, posting_limit=5_000_000, algorithm: Literal["bsbi", "spimi"] = "spimi"):
         """
-        SPIMI implementation for reverse indexing
+        BSBI or SPIMI implementation for reverse indexing, storing term positions
         """
         block_count = 0
         posting_count = 0
 
-        # Term to Posting list, which consists of DocID to term positions
-        dictionary: dict[str, dict[int, list[int]]] = defaultdict(partial(defaultdict, list))
+        # BSBI uses global term to ID mapping -> Beaucoup de memory usage, as vocabulary keeps increasing
+        # SPIMI uses term as key, no global dictionary mapping -> Beaucoup de storage usage
+        def default(term: str):
+            return term
+        key = default if algorithm == "spimi" else self.lexicon.get_id
+
+        # Term or TermID to Posting list, which consists of DocID to term positions
+        dictionary: Dict[Any, Dict[int, List[int]]] = defaultdict(partial(defaultdict, list))
 
         # Remove all index files
         os.makedirs(self.path, exist_ok=True)
@@ -54,43 +60,7 @@ class Indexer:
             doc_id, content = self.manager.read_document(filepath)
 
             for position, token in enumerate(self.tokenizer.tokenize(content)):
-                posting_list = dictionary[token]
-                posting_list[doc_id].append(position)
-                posting_count += 1
-
-                # Posting limit is the memory limit
-                if posting_count >= posting_limit:
-                    if dictionary:
-                        self._write_block(dictionary, block_count)
-                        block_count += 1
-                    posting_count = 0
-                    dictionary = defaultdict(partial(defaultdict, list))
-        
-        if dictionary:
-            self._write_block(dictionary, block_count)
-
-        self._merge_blocks()
-
-    def build_index_bsbi(self, filestream, posting_limit=5_000_000):
-        """
-        BSBI implementation for reverse indexing
-        """
-        block_count = 0
-        posting_count = 0
-
-        # TermID to Posting list, which consists of DocID to term positions
-        dictionary: dict[int, dict[int, list[int]]] = defaultdict(partial(defaultdict, list))
-
-        # Remove all index files
-        os.makedirs(self.path, exist_ok=True)
-        for zst in glob.glob(os.path.join(self.path, "*.zst")):
-            os.remove(zst)
-
-        while filepath := next(filestream, None):
-            doc_id, content = self.manager.read_document(filepath)
-
-            for position, token in enumerate(self.tokenizer.tokenize(content)):
-                term_id = self.lexicon.get_id(token)
+                term_id = key(token)
                 posting_list = dictionary[term_id]
                 posting_list[doc_id].append(position)
                 posting_count += 1
@@ -231,7 +201,7 @@ def filestream():
 if __name__ == "__main__":
     indexer = Indexer()
 
-    indexer.build_index_spimi(filestream(), posting_limit=float("inf"))
+    indexer.build_index(filestream(), posting_limit=float("inf"))
     gen = indexer._read_block(indexer.index_file)
     while x := next(gen, None):
         print(x)
