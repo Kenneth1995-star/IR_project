@@ -10,7 +10,7 @@ import zstandard as zstd
 
 class Indexer:
     def __init__(self, tokenizer: Optional[Tokenizer] = None, path="index/"):
-        self.tokenizer = tokenizer or Tokenizer()
+        self.tokenizer = tokenizer or Tokenizer(use_stemmer=True)
         self.manager = DocumentManager()
         self.posting_list = defaultdict(list)
         self.lexicon: Lexicon = Lexicon()
@@ -57,9 +57,13 @@ class Indexer:
             os.remove(zst)
 
         while filepath := next(filestream, None):
-            doc_id, content = self.manager.read_document(filepath)
+            # doc_id, content = self.manager.read_document(filepath)
+            doc_id = self.manager.add_document(filepath)
+            position = 0
+            tokenstream = self.tokenizer.token_stream(self.manager.read_document_stream_from_id(doc_id))
 
-            for position, token in enumerate(self.tokenizer.tokenize(content)):
+            while token := next(tokenstream, None):
+            # for position, token in enumerate(self.tokenizer.tokenize(content)):
                 term_id = key(token)
                 posting_list = dictionary[term_id]
                 posting_list[doc_id].append(position)
@@ -72,6 +76,7 @@ class Indexer:
                         block_count += 1
                     posting_count = 0
                     dictionary = defaultdict(partial(defaultdict, list))
+                position += 1
         
         if dictionary:
             self._write_block(dictionary, block_count)
@@ -95,7 +100,7 @@ class Indexer:
 
     def _read_block(self, filepath):
         """
-        Read a file written in _write_block, returning a generator.
+        Read a file written in _write_block or _merge_blocks, returning a generator.
         File stream reduces memory usage.
         Returns:
             (term_id, postings), postings is a list of [doc_id, positions]
@@ -209,7 +214,7 @@ def filestream():
 if __name__ == "__main__":
     indexer = Indexer()
 
-    indexer.build_index(filestream(), posting_limit=5_000_000_000)
+    indexer.build_index(filestream(), posting_limit=50_000_000, global_map=False)
     gen = indexer._read_block(indexer.index_file)
     while x := next(gen, None):
         print(x)

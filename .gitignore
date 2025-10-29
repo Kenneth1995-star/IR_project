@@ -14,5 +14,6 @@ data/index.lexicon
 data/*.postings
 data/*.lexicon
 index/
+nltk_data/
 .vscode/
 .idea/

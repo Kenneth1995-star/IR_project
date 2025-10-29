@@ -31,3 +31,15 @@ class DocumentManager:
     def read_document_from_id(self, doc_id: int) -> str:
         with open(self.documents[doc_id], "r") as f:
             return f.read()
+
+    def read_document_stream(self, filestream):
+        while filepath := next(filestream, None):
+            doc_id = self.add_document(filepath)
+            with open(filepath, "r") as f:
+                for line in f:
+                    yield line
+    
+    def read_document_stream_from_id(self, doc_id: int):
+        with open(self.documents[doc_id], "r") as f:
+            for line in f:
+                yield line
