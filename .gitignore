@@ -13,5 +13,6 @@ data/index.postings
 data/index.lexicon
 data/*.postings
 data/*.lexicon
+index/
 .vscode/
 .idea/

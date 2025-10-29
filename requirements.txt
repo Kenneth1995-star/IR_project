@@ -1,7 +1,8 @@
 # Minimal requirements for the IR_project
 # nltk is optional; only needed if stemming is enabled in Tokenizer
 nltk>=3.6.7
-python
 numpy
 pandas
 scikit-learn
+msgpack==1.1.2
+zstandard==0.25.0
