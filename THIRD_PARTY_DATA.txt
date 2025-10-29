@@ -1,0 +1,7 @@
+Dataset: Wikipedia Movies
+Source: https://www.kaggle.com/datasets/exactful/wikipedia-movies  
+Derived from: Wikipedia / Wikimedia Foundation  
+License: Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)  
+Link to license: https://creativecommons.org/licenses/by-sa/3.0/  
+Attribution: Wikipedia contributors  
+Kaggle uploader / collaborator: exactful (Kaggle username)  

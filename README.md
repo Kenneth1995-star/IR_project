@@ -16,6 +16,13 @@ It demonstrates:
 - **Okapi BM25 probabilistic model**
 - **Evaluation metrics:** Precision, Recall, nDCG, DCG, Average Precision, Mean Average Precision, Reciprocal Rank, Mean Reciprocal Rank
 
+### Dataset  
+This project uses the dataset **“Wikipedia Movies”** available on Kaggle:  
+https://www.kaggle.com/datasets/exactful/wikipedia-movies  
+
+The dataset is derived from content sourced from the Wikimedia Foundation / Wikipedia community, and is provided under the [Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)](https://creativecommons.org/licenses/by-sa/3.0/) license.  
+Attribution: Wikipedia contributors. 
+
 ---
 
 ## Project Structure
