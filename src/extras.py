@@ -66,8 +66,7 @@ def mean_average_precision(qrels: List[Iterable[str]], ranked_lists: List[List[s
     return sum(aps) / float(len(aps)) if aps else 0.0
 
 def reciprocal_rank(relevant: Iterable[str], ranked: List[str]) -> float:
-    rset = set(relevant)3
-    
+    rset = set(relevant)
     for i, d in enumerate(ranked):
         if d in rset:
             return 1.0 / float(i + 1)
