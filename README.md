@@ -23,6 +23,9 @@ https://www.kaggle.com/datasets/exactful/wikipedia-movies
 The dataset is derived from content sourced from the Wikimedia Foundation / Wikipedia community, and is provided under the [Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)](https://creativecommons.org/licenses/by-sa/3.0/) license.  
 Attribution: Wikipedia contributors. 
 
+### NLTK data
+This projects also makes use of `punkt` and `corpora` from NLTK, which will be downloaded automatically.
+
 ---
 
 ## Project Structure

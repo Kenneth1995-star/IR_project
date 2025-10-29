@@ -37,8 +37,8 @@ class Tokenizer:
         # nltk stopwords and stemmer
         os.makedirs(nltk_dir, exist_ok=True)
         nltk.data.path.append(nltk_dir)
-        nltk.download("stopwords", download_dir=nltk_dir, quiet=True)
-        nltk.download("punkt", download_dir=nltk_dir, quiet=True)
+        nltk.download("stopwords", download_dir=nltk_dir)
+        nltk.download("punkt", download_dir=nltk_dir)
         self.stopwords = set(custom_stopwords) if custom_stopwords is not None else stopwords.words("english")
 
         # Detect tokens using regex patterns.
