@@ -1,4 +1,4 @@
-class Vocabulary:
+class Lexicon:
     def __init__(self):
         self.next_id: int = 0
         self.term_to_id: dict[str, int] =  dict()

@@ -25,8 +25,9 @@ class DocumentManager:
 
     def read_document(self, filepath) -> tuple[int, str]:
         doc_id = self.add_document(filepath)
-        return doc_id, self.read_document_from_id(doc_id)
+        with open(filepath, "r", encoding="utf8") as f:
+            return doc_id, f.read()
 
     def read_document_from_id(self, doc_id: int) -> str:
-        with open(filepath, "r", encoding="utf8") as file:
-            return file.read()
+        with open(self.documents[doc_id], "r") as f:
+            return f.read()
