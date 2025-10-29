@@ -14,8 +14,8 @@ class Indexer:
         self.manager = DocumentManager()
         self.posting_list = defaultdict(list)
         self.lexicon: Lexicon = Lexicon()
-        self.path = path
-        self.index_file = os.path.join(self.path, "index")
+        self.path = path # path to index files
+        self.index_file = os.path.join(self.path, "index") # final index file after merge
 
     def build_index_in_memory(self, filestream):
         """
@@ -35,15 +35,53 @@ class Indexer:
                     "positions": data
                 })
 
-    def build_index(self, filestream, posting_limit=5_000_000):
+    def build_index_spimi(self, filestream, posting_limit=5_000):
+        """
+        SPIMI implementation for reverse indexing
+        """
+        block_count = 0
+        posting_count = 0
+
+        # Term to Posting list, which consists of DocID to term positions
+        dictionary: dict[str, dict[int, list[int]]] = defaultdict(partial(defaultdict, list))
+
+        # Remove all index files
+        os.makedirs(self.path, exist_ok=True)
+        for zst in glob.glob(os.path.join(self.path, "*.zst")):
+            os.remove(zst)
+
+        while filepath := next(filestream, None):
+            doc_id, content = self.manager.read_document(filepath)
+
+            for position, token in enumerate(self.tokenizer.tokenize(content)):
+                posting_list = dictionary[token]
+                posting_list[doc_id].append(position)
+                posting_count += 1
+
+                # Posting limit is the memory limit
+                if posting_count >= posting_limit:
+                    if dictionary:
+                        self._write_block(dictionary, block_count)
+                        block_count += 1
+                    posting_count = 0
+                    dictionary = defaultdict(partial(defaultdict, list))
+        
+        if dictionary:
+            self._write_block(dictionary, block_count)
+
+        self._merge_blocks()
+
+    def build_index_bsbi(self, filestream, posting_limit=5_000_000):
         """
         BSBI implementation for reverse indexing
         """
         block_count = 0
         posting_count = 0
 
+        # TermID to Posting list, which consists of DocID to term positions
         dictionary: dict[int, dict[int, list[int]]] = defaultdict(partial(defaultdict, list))
 
+        # Remove all index files
         os.makedirs(self.path, exist_ok=True)
         for zst in glob.glob(os.path.join(self.path, "*.zst")):
             os.remove(zst)
@@ -57,6 +95,7 @@ class Indexer:
                 posting_list[doc_id].append(position)
                 posting_count += 1
 
+                # Posting limit is the memory limit
                 if posting_count >= posting_limit:
                     if dictionary:
                         self._write_block(dictionary, block_count)
@@ -192,7 +231,7 @@ def filestream():
 if __name__ == "__main__":
     indexer = Indexer()
 
-    indexer.build_index(filestream())
+    indexer.build_index_spimi(filestream(), posting_limit=float("inf"))
     gen = indexer._read_block(indexer.index_file)
     while x := next(gen, None):
         print(x)
