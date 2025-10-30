@@ -2,10 +2,12 @@ from tokenizer import Tokenizer
 from DocumentManager import DocumentManager
 from Lexicon import Lexicon
 from collections import defaultdict
-from typing import Optional, Any, Literal, Dict, List
+from typing import Optional, Any, Literal, Dict, List, Tuple, Iterable
 from functools import partial
-import msgpack, os, glob
+from Extras import vbyte_decode, vbyte_encode, delta_decode, delta_encode
+import msgpack, os, glob, io, mmap
 import zstandard as zstd
+import marisa_trie
 
 
 class Indexer:
@@ -15,8 +17,16 @@ class Indexer:
         self.posting_list = defaultdict(list)
         self.lexicon: Lexicon = Lexicon()
         self.path = path # path to index files
-        self.index_file = os.path.join(self.path, "index") # final index file after merge
-        self.global_map = False
+
+        # --- Disk index ---
+
+        # Little-endian: off: uint64, len: uint32, df: uint32  => 16 bytes
+        self._record_fmt = "<QII"
+        self.postings_path = os.path.join(self.path, "postings.bin") 
+        self.lexicon_path = os.path.join(self.path, "lexicon.marisa")
+        self.postings_fd = None
+        self.mm = None
+        self.trie = None
 
     def build_index_in_memory(self, filestream):
         """
@@ -36,19 +46,14 @@ class Indexer:
                     "positions": data
                 })
 
-    def build_index(self, filestream, posting_limit=5_000_000, global_map=False):
+    def build_index(self, filestream, posting_limit=5_000_000):
         """
         SPIMI implementation for reverse indexing, storing term positions. 
         """
         block_count = 0
         posting_count = 0
-
-        def default(term: str):
-            return term
-        key = self.lexicon.get_id if global_map else default
-        self.global_map = global_map
-
-        # Term or TermID to Posting list, which consists of DocID to term positions
+        
+        # Term to Posting list, which consists of DocID to term positions
         dictionary: Dict[Any, Dict[int, List[int]]] = defaultdict(partial(defaultdict, list))
 
         # Remove all index files
@@ -57,15 +62,12 @@ class Indexer:
             os.remove(zst)
 
         while filepath := next(filestream, None):
-            # doc_id, content = self.manager.read_document(filepath)
             doc_id = self.manager.add_document(filepath)
             position = 0
             tokenstream = self.tokenizer.token_stream(self.manager.read_document_stream_from_id(doc_id))
 
             while token := next(tokenstream, None):
-            # for position, token in enumerate(self.tokenizer.tokenize(content)):
-                term_id = key(token)
-                posting_list = dictionary[term_id]
+                posting_list = dictionary[token]
                 posting_list[doc_id].append(position)
                 posting_count += 1
 
@@ -82,6 +84,42 @@ class Indexer:
             self._write_block(dictionary, block_count)
 
         self._merge_blocks()
+
+    def get_meta(self, term: str):
+        """
+        Returns (off, length, df) or None.
+        """
+        res = self.trie.get(term)
+        return res[0] if res else None
+
+    def get_postings(self, term: str) -> List[Tuple[int, List[int]]]:
+        meta = self.get_meta(term)
+        if not meta:
+            return []
+        off, ln, _df = meta
+        raw = self.mm[off:off+ln]
+        return self._decode_term_block(raw)
+
+    def iter_prefix(self, prefix: str, limit: int = 50):
+        """
+        Predictive/prefix lookup for terms beginning with `prefix`.
+        """
+        count = 0
+        for key in self.trie.iterkeys(prefix):
+            yield key, self.trie[key][0]
+            count += 1
+            if count >= limit:
+                break
+
+    def load(self):
+        self.postings_fd = open(self.postings_path, "rb")
+        self.mm = mmap.mmap(self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ)
+        self.trie = marisa_trie.RecordTrie(self._record_fmt)
+        self.trie.load(self.lexicon_path)
+
+    def close(self):
+        self.mm.close()
+        self.postings_fd.close()
 
     def _write_block(self, dictionary, block_id: int) -> None:
         """
@@ -102,7 +140,7 @@ class Indexer:
         """
         Read a file written in _write_block or _merge_blocks, returning a generator.
         File stream reduces memory usage.
-        Returns:
+        Yields:
             (term_id, postings), postings is a list of [doc_id, positions]
         """
         with open(filepath, "rb") as f, zstd.ZstdDecompressor().stream_reader(f) as zf:
@@ -157,7 +195,7 @@ class Indexer:
             return
 
         if len(filepaths) == 1:
-            os.rename(filepaths[0], self.index_file)
+            self._write_posting_bin(self._read_block(filepaths[0]))
             return
 
         idx = 0
@@ -205,6 +243,83 @@ class Indexer:
             idx += 2
         self._merge_blocks(level + 1)
 
+    def _encode_term_block(self, postings: List[Tuple[int, List[int]]]) -> bytes:
+        """
+        postings: list of (doc_id, positions[]) with doc_ids sorted, positions sorted
+        """
+        buf = io.BytesIO()
+        # docIDs (delta + vbyte)
+        docids = [doc for doc, _ in postings]
+        buf.write(vbyte_encode([len(docids)]))
+        buf.write(vbyte_encode(list(delta_encode(docids))))
+        # term frequencies
+        tfs = [len(pos) for _, pos in postings]
+        buf.write(vbyte_encode(tfs))
+        # positions (per doc: gap-encode then vbyte)
+        for _, pos in postings:
+            gaps = [pos[0]] + [pos[i]-pos[i-1] for i in range(1, len(pos))]
+            buf.write(vbyte_encode([len(gaps)]))
+            buf.write(vbyte_encode(gaps))
+        return buf.getvalue()
+
+    def _decode_term_block(self, raw: bytes) -> List[Tuple[int, List[int]]]:
+        it = iter(vbyte_decode(raw))
+        # number of docs
+        num_docs = next(it)
+        # docids
+        docid_deltas = [next(it) for _ in range(num_docs)]
+        docids = list(delta_decode(docid_deltas))
+        # tfs
+        tfs = [next(it) for _ in range(num_docs)]
+        postings = []
+        for d, tf in zip(docids, tfs):
+            plen = next(it)
+            gaps = [next(it) for _ in range(plen)]
+            # rebuild positions
+            pos = []
+            acc = 0
+            for g in gaps:
+                acc += g
+                pos.append(acc)
+            postings.append((d, pos))
+        return postings
+
+    def _build_marisa_lexicon(self, items: Iterable[Tuple[str, int, int, int]]):
+        """
+        items: iterable of (term, off, length, df)
+        """
+        keys, recs = [], []
+        for term, off, length, df in items:
+            keys.append(term)
+            recs.append((off, length, df))
+        self.trie = marisa_trie.RecordTrie(self._record_fmt, zip(keys, recs))
+        self.trie.save(self.lexicon_path)
+
+    def _write_posting_bin(self, posting_stream):
+        """
+        spimi_terms_to_postings must be sorted by term; each value is postings list.
+        Writes postings.bin and lexicon.marisa.
+        """
+        # Stream-write postings; collect (term, off, len, df) for lexicon
+        meta: List[Tuple[str, int, int, int]] = []
+        off = 0
+        with open(self.postings_path, "wb") as f:
+            while x := next(posting_stream, None):
+                term, postings = x
+                block = self._encode_term_block(postings)
+                ln = len(block)
+                f.write(block)
+                df = len(postings)
+                meta.append((term, off, ln, df))
+                off += ln
+
+        # Build mmappable lexicon
+        self._build_marisa_lexicon(meta)
+
+        # Make get_posting available
+        self.postings_fd = open(self.postings_path, "rb")
+        self.mm = mmap.mmap(self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ)
+
 def filestream():
     sample_dir = os.path.join("data", "wikipedia-movies")
     paths = sorted(glob.glob(os.path.join(sample_dir, "*")))
@@ -214,7 +329,10 @@ def filestream():
 if __name__ == "__main__":
     indexer = Indexer()
 
-    indexer.build_index(filestream(), posting_limit=50_000_000, global_map=False)
-    gen = indexer._read_block(indexer.index_file)
+    # indexer.build_index(filestream(), posting_limit=50_000_000)
+    indexer.load()
+    print(indexer.get_meta("000-meter"))
+    print(indexer.get_postings("000-meter"))
+    gen = indexer.iter_prefix("abscon")
     while x := next(gen, None):
         print(x)

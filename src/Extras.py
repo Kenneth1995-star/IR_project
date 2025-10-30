@@ -76,3 +76,40 @@ def mean_reciprocal_rank(qrels: List[Iterable[str]], ranked_lists: List[List[str
     rr = [reciprocal_rank(r, rl) for r, rl in zip(qrels, ranked_lists)]
     return sum(rr) / float(len(rr)) if rr else 0.0
 
+def vbyte_encode(nums):
+    out = bytearray()
+    for n in nums:
+        while True:
+            b = n & 0x7F
+            n >>= 7
+            if n:
+                out.append(b | 0x80)
+            else:
+                out.append(b)
+                break
+    return bytes(out)
+
+def vbyte_decode(buf):
+    n = 0; shift = 0
+    for b in buf:
+        n |= (b & 0x7F) << shift
+        if (b & 0x80) == 0:
+            yield n
+            n = 0; shift = 0
+        else:
+            shift += 7
+
+def delta_encode(sorted_nums):
+    """
+    Assumes sorted
+    """
+    prev = 0
+    for x in sorted_nums:
+        yield x - prev
+        prev = x
+
+def delta_decode(deltas):
+    s = 0
+    for d in deltas:
+        s += d
+        yield s
