@@ -77,6 +77,9 @@ def mean_reciprocal_rank(qrels: List[Iterable[str]], ranked_lists: List[List[str
     return sum(rr) / float(len(rr)) if rr else 0.0
 
 def vbyte_encode(nums):
+    """
+    Encodes list of nums
+    """
     out = bytearray()
     for n in nums:
         while True:
@@ -90,6 +93,9 @@ def vbyte_encode(nums):
     return bytes(out)
 
 def vbyte_decode(buf):
+    """
+    Decodes encoded list of nums
+    """
     n = 0; shift = 0
     for b in buf:
         n |= (b & 0x7F) << shift

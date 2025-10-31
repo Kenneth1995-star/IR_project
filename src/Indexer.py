@@ -13,10 +13,9 @@ import marisa_trie
 class Indexer:
     def __init__(self, tokenizer: Optional[Tokenizer] = None, path="index/"):
         self.tokenizer = tokenizer or Tokenizer(use_stemmer=True)
-        self.manager = DocumentManager()
-        self.posting_list = defaultdict(list)
-        self.lexicon: Lexicon = Lexicon()
         self.path = path
+        self.manager = DocumentManager(path)
+        self.posting_list = defaultdict(list)
 
         # Disk index
         self.postings_path = os.path.join(self.path, "postings.bin") 
@@ -28,7 +27,7 @@ class Indexer:
         self.lexicon_path = os.path.join(self.path, "lexicon.marisa")
         self.trie = None
 
-    def build_index(self, filestream, posting_limit=50_000_000):
+    def build_index(self, filepaths, posting_limit=50_000_000):
         """
         SPIMI implementation for reverse indexing, storing term positions. 
         """
@@ -43,10 +42,10 @@ class Indexer:
         for zst in glob.glob(os.path.join(self.path, "*.zst")):
             os.remove(zst)
 
+        filestream = self.manager.initialize(filepaths)
         while filepath := next(filestream, None):
-            doc_id = self.manager.add_document(filepath)
             position = 0
-            input_stream = self.manager.read_document_stream_from_id(doc_id)
+            doc_id, input_stream = self.manager.get_id_and_read_doc(filepath)
             tokenstream = self.tokenizer.token_stream_mp(input_stream)
 
             while token := next(tokenstream, None):
@@ -62,12 +61,13 @@ class Indexer:
                     posting_count = 0
                     dictionary = defaultdict(partial(defaultdict, list))
                 position += 1
-            self.manager.add_length(doc_id, position)
+            self.manager.set_length(doc_id, position)
         
         if dictionary:
             self._write_block(dictionary, block_count)
 
         self._merge_blocks()
+        self.manager.finalize()
 
     def get_meta(self, term: str):
         """
@@ -102,7 +102,8 @@ class Indexer:
         self.postings_fd = open(self.postings_path, "rb")
         self.mm = mmap.mmap(self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ)
         self.trie = marisa_trie.RecordTrie(self._record_fmt)
-        self.trie.load(self.lexicon_path)
+        self.trie.mmap(self.lexicon_path)
+        self.manager.load()
 
     def close(self):
         self.mm.close()
@@ -281,6 +282,7 @@ class Indexer:
             recs.append((off, length, df))
         self.trie = marisa_trie.RecordTrie(self._record_fmt, zip(keys, recs))
         self.trie.save(self.lexicon_path)
+        self.trie.mmap(self.lexicon_path)
 
     def _write_posting_bin(self, posting_stream):
         """
@@ -319,7 +321,7 @@ if __name__ == "__main__":
     indexer.build_index(filestream(), posting_limit=50_000_000)
     # indexer._merge_blocks()
 
-    # # indexer.load()
+    # indexer.load()
     print(indexer.get_meta("000-meter"))
     print(indexer.get_postings("000-meter"))
     # gen = indexer.iter_prefix("ab")
