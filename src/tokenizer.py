@@ -54,13 +54,13 @@ class Tokenizer:
     def __init__(self, custom_stopwords: Optional[Iterable[str]] = None, use_stemmer: bool = True, 
                  nltk_dir="nltk_data", nltk_download: bool = True):
 
+        self.nltk_dir = nltk_dir
         # nltk stopwords and stemmer
         if nltk_download:
             os.makedirs(nltk_dir, exist_ok=True)
             nltk.data.path.append(nltk_dir)
             nltk.download("stopwords", download_dir=nltk_dir)
             nltk.download("punkt", download_dir=nltk_dir)
-            self.nltk_dir = nltk_dir
         self.stopwords = set(custom_stopwords) if custom_stopwords is not None else stopwords.words("english")
 
         # Detect tokens using regex patterns.
@@ -147,7 +147,7 @@ class Tokenizer:
             for token in self.tokenize(text):
                 yield token
 
-    def token_stream_mp(self, stream: Iterable[str], workers: Optional[int] = None, batch_size: int = 512, prefetch_batches: int = 8):
+    def token_stream_mp(self, stream: Iterable[str], workers: Optional[int] = None, batch_size: int = 128, prefetch_batches: int = 4):
         """
         Yield tokens using multiple processes.
         - stream: an iterator/generator of strings
