@@ -16,37 +16,19 @@ class Indexer:
         self.manager = DocumentManager()
         self.posting_list = defaultdict(list)
         self.lexicon: Lexicon = Lexicon()
-        self.path = path # path to index files
+        self.path = path
 
-        # --- Disk index ---
-
-        # Little-endian: off: uint64, len: uint32, df: uint32  => 16 bytes
-        self._record_fmt = "<QII"
+        # Disk index
         self.postings_path = os.path.join(self.path, "postings.bin") 
-        self.lexicon_path = os.path.join(self.path, "lexicon.marisa")
         self.postings_fd = None
         self.mm = None
+
+        # Disk lexicon
+        self._record_fmt = "<QII" # 8 + 4 + 4 bytes
+        self.lexicon_path = os.path.join(self.path, "lexicon.marisa")
         self.trie = None
 
-    def build_index_in_memory(self, filestream):
-        """
-        In-memory posting list building with term frequency and positions
-        """
-        while filepath := next(filestream, None):
-            doc_id, content = self.manager.read_document(filepath)
-
-            temp = defaultdict(list)
-            for position, token in enumerate(self.tokenizer.tokenize(content)):
-                temp[token].append(position)
-
-            for token, data in temp.items():
-                self.posting_list[token].append({
-                    "doc_id": doc_id,
-                    "frequency": len(data),
-                    "positions": data
-                })
-
-    def build_index(self, filestream, posting_limit=5_000_000):
+    def build_index(self, filestream, posting_limit=50_000_000):
         """
         SPIMI implementation for reverse indexing, storing term positions. 
         """
@@ -64,7 +46,8 @@ class Indexer:
         while filepath := next(filestream, None):
             doc_id = self.manager.add_document(filepath)
             position = 0
-            tokenstream = self.tokenizer.token_stream(self.manager.read_document_stream_from_id(doc_id))
+            input_stream = self.manager.read_document_stream_from_id(doc_id)
+            tokenstream = self.tokenizer.token_stream_mp(input_stream)
 
             while token := next(tokenstream, None):
                 posting_list = dictionary[token]
@@ -79,6 +62,7 @@ class Indexer:
                     posting_count = 0
                     dictionary = defaultdict(partial(defaultdict, list))
                 position += 1
+            self.manager.add_length(doc_id, position)
         
         if dictionary:
             self._write_block(dictionary, block_count)
@@ -112,6 +96,9 @@ class Indexer:
                 break
 
     def load(self):
+        """
+        Loads previously saved postings and lexicon file.
+        """
         self.postings_fd = open(self.postings_path, "rb")
         self.mm = mmap.mmap(self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ)
         self.trie = marisa_trie.RecordTrie(self._record_fmt)
@@ -150,7 +137,8 @@ class Indexer:
 
     def _merge_postings(self, l_postings, r_postings):
         """
-        Merge 2 postings of the same term, concatinating positions of the same document
+        Merge 2 postings of the same term, concatinating positions of the same document.
+        Uses 2-pointer merge
         Returns:
             The merged postings
         """
@@ -208,6 +196,7 @@ class Indexer:
             l_content = next(l_it, None)
             r_content = next(r_it, None)
 
+            # 2 pointer merge
             outpath = os.path.join(self.path, f"{level}-{idx / 2}.zst")
             with open(outpath, "wb") as f, zstd.ZstdCompressor().stream_writer(f) as zf:
                 pack = msgpack.Packer().pack
@@ -252,9 +241,7 @@ class Indexer:
         docids = [doc for doc, _ in postings]
         buf.write(vbyte_encode([len(docids)]))
         buf.write(vbyte_encode(list(delta_encode(docids))))
-        # term frequencies
-        tfs = [len(pos) for _, pos in postings]
-        buf.write(vbyte_encode(tfs))
+
         # positions (per doc: gap-encode then vbyte)
         for _, pos in postings:
             gaps = [pos[0]] + [pos[i]-pos[i-1] for i in range(1, len(pos))]
@@ -263,20 +250,20 @@ class Indexer:
         return buf.getvalue()
 
     def _decode_term_block(self, raw: bytes) -> List[Tuple[int, List[int]]]:
+        """
+        """
         it = iter(vbyte_decode(raw))
         # number of docs
         num_docs = next(it)
         # docids
         docid_deltas = [next(it) for _ in range(num_docs)]
         docids = list(delta_decode(docid_deltas))
-        # tfs
-        tfs = [next(it) for _ in range(num_docs)]
         postings = []
-        for d, tf in zip(docids, tfs):
+        for d in docids:
             plen = next(it)
             gaps = [next(it) for _ in range(plen)]
             # rebuild positions
-            pos = []
+            pos = [] 
             acc = 0
             for g in gaps:
                 acc += g
@@ -298,7 +285,7 @@ class Indexer:
     def _write_posting_bin(self, posting_stream):
         """
         spimi_terms_to_postings must be sorted by term; each value is postings list.
-        Writes postings.bin and lexicon.marisa.
+        Writes postings and lexicon files
         """
         # Stream-write postings; collect (term, off, len, df) for lexicon
         meta: List[Tuple[str, int, int, int]] = []
@@ -316,7 +303,7 @@ class Indexer:
         # Build mmappable lexicon
         self._build_marisa_lexicon(meta)
 
-        # Make get_posting available
+        # Make querying available
         self.postings_fd = open(self.postings_path, "rb")
         self.mm = mmap.mmap(self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ)
 
@@ -329,10 +316,12 @@ def filestream():
 if __name__ == "__main__":
     indexer = Indexer()
 
-    # indexer.build_index(filestream(), posting_limit=50_000_000)
-    indexer.load()
+    indexer.build_index(filestream(), posting_limit=50_000_000)
+    # indexer._merge_blocks()
+
+    # # indexer.load()
     print(indexer.get_meta("000-meter"))
     print(indexer.get_postings("000-meter"))
-    gen = indexer.iter_prefix("abscon")
-    while x := next(gen, None):
-        print(x)
+    # gen = indexer.iter_prefix("ab")
+    # while x := next(gen, None):
+    #     print(x)
