@@ -5,7 +5,7 @@ from collections import defaultdict
 from typing import Optional, Any, Literal, Dict, List, Tuple, Iterable
 from functools import partial
 from Extras import vbyte_decode, vbyte_encode, delta_decode, delta_encode
-import msgpack, os, glob, io, mmap
+import msgpack, os, glob, io, mmap, sys
 import zstandard as zstd
 import marisa_trie
 
@@ -27,15 +27,16 @@ class Indexer:
         self.lexicon_path = os.path.join(self.path, "lexicon.marisa")
         self.trie = None
 
-    def build_index(self, filepaths, posting_limit=50_000_000):
+    def build_index(self, filepaths, bytes_limit=50_000_000):
         """
         SPIMI implementation for reverse indexing, storing term positions. 
         """
-        block_count = 0
-        posting_count = 0
         
         # Term to Posting list, which consists of DocID to term positions
         dictionary: Dict[Any, Dict[int, List[int]]] = defaultdict(partial(defaultdict, list))
+
+        block_count = 0
+        estimated_bytes = sys.getsizeof(dictionary)
 
         # Remove all index files
         os.makedirs(self.path, exist_ok=True)
@@ -49,17 +50,19 @@ class Indexer:
             tokenstream = self.tokenizer.token_stream_mp(input_stream)
 
             while token := next(tokenstream, None):
+                # Increase estimation
+                estimated_bytes += 0 if token in dictionary else sys.getsizeof(token)
+                estimated_bytes += sys.getsizeof(position)
                 posting_list = dictionary[token]
                 posting_list[doc_id].append(position)
-                posting_count += 1
 
-                # Posting limit is the memory limit
-                if posting_count >= posting_limit:
+                # Flush
+                if estimated_bytes >= bytes_limit:
                     if dictionary:
                         self._write_block(dictionary, block_count)
                         block_count += 1
-                    posting_count = 0
                     dictionary = defaultdict(partial(defaultdict, list))
+                    estimated_bytes = sys.getsizeof(dictionary)
                 position += 1
             self.manager.set_length(doc_id, position)
         
@@ -318,7 +321,7 @@ def filestream():
 if __name__ == "__main__":
     indexer = Indexer()
 
-    indexer.build_index(filestream(), posting_limit=50_000_000)
+    indexer.build_index(filestream(), bytes_limit=2_000_000_000)
     # indexer._merge_blocks()
 
     # indexer.load()
