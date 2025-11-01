@@ -72,12 +72,6 @@ class Indexer:
         self._merge_blocks()
         self.manager.finalize()
 
-    def get_doc_keys(self) -> List[str]:
-        return self.manager.get_keys()
-
-    def get_doc_ids(self) -> List[int]:
-        return self.manager.get_values()
-
     def get_meta(self, term: str):
         """
         Returns (off, length, df) or None.

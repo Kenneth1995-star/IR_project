@@ -6,21 +6,29 @@ Implements:
  - Boolean queries: AND, OR, NOT, parentheses (shunting-yard + merge ops)
  - Phrase queries: "exact phrase" (requires positional index in Indexer)
  - Ranked retrieval: TF-IDF cosine and BM25
+ - Uses Indexer.get_postings_list(token) and Indexer.get_positions(token)
+ - Uses Tokenizer.tokenize(query) for identical normalization between index & query
 """
+
+# here we are importing helpful modules and type hints
 from typing import List, Tuple, Optional
 from collections import defaultdict
 import math
 import re
 
-from tokenizer import Tokenizer
-# from indexer import Indexer
-from Indexer import Indexer
+# here we are importing the Tokenizer (for splitting queries into words)
+# and the Indexer (which stores our inverted index)
+from .tokenizer import Tokenizer
+from .indexer import Indexer
 
 
 class QueryProcessor:
-    def __init__(self, indexer: Indexer):
+    # here we are initializing the query processor
+    def __init__(self, indexer: Indexer, tokenizer: Optional[Tokenizer] = None):
+        # here we are storing the indexer object that contains postings and stats
         self.indexer = indexer
-        self.tokenizer = indexer.tokenizer
+        # here we are using the given tokenizer, or falling back to the indexer's tokenizer, or creating a new one
+        self.tokenizer = tokenizer or indexer.tokenizer or Tokenizer()
 
     # --- BOOLEAN AND PHRASE PARSING HELPERS ---
 
@@ -86,25 +94,23 @@ class QueryProcessor:
 
     # --- PHRASE SEARCH SUPPORT ---
 
-    def _phrase_search(self, phrase_tokens: List[str]) -> List[int]:
+    # here we are retrieving all documents that contain an exact sequence of tokens (a phrase)
+    def _docs_with_phrase(self, phrase_tokens: List[str]) -> List[str]:
         if not phrase_tokens:
             return []
-        
-        postings_list = []
-        for t in phrase_tokens:
-            p_list = self.indexer.get_postings(t)
-            if p_list is None:
-                return [] 
-            postings_list.append(p_list)
 
-        # Convert to dict for Doc lookup
-        maps = []
-        for plist in postings_list:
-            maps.append({doc: positions for doc, positions in plist})
+        # here we are retrieving the position dictionary for each token
+        # (maps token -> {doc_id: [positions]})
+        pos_dicts = []
+        for t in phrase_tokens:
+            pd = self.indexer.get_positions(t)
+            if pd is None:
+                return []  # here we are aborting if no positional info is stored
+            pos_dicts.append(pd)
 
         # here we are finding candidate documents that contain all tokens in the phrase
-        cand = set(maps[0].keys())
-        for pd in maps[1:]:
+        cand = set(pos_dicts[0].keys())
+        for pd in pos_dicts[1:]:
             cand &= set(pd.keys())
 
         if not cand:
@@ -113,8 +119,8 @@ class QueryProcessor:
         out = []
         # here we are checking for consecutive positions in each candidate document
         for doc in sorted(cand):
-            pos0 = maps[0][doc]
-            subsequent_sets = [set(pd[doc]) for pd in maps[1:]]
+            pos0 = pos_dicts[0][doc]
+            subsequent_sets = [set(pd[doc]) for pd in pos_dicts[1:]]
             for p in pos0:
                 ok = True
                 for i, sset in enumerate(subsequent_sets, start=1):
@@ -133,19 +139,6 @@ class QueryProcessor:
         tokens = self._tokenize_boolean(query)
         if not tokens:
             return []
-
-        # Insert implicit AND
-        result = []
-        for i, tok in enumerate(tokens):
-            result.append(tok)
-            if i + 1 < len(tokens):
-                nxt = tokens[i + 1]
-                if any(x in ["AND", "OR"] for x in [tok, nxt]):
-                    continue
-                if tok not in  ["(", "NOT"] and nxt != ")":
-                    result.append('AND')
-
-        tokens = result
 
         # here we are defining operator precedence
         prec = {'NOT': 3, 'AND': 2, 'OR': 1}
@@ -178,7 +171,7 @@ class QueryProcessor:
 
         # here we are evaluating the RPN expression
         stack: List[List[str]] = []
-        universe = self.indexer.get_doc_ids()
+        universe = sorted(list(self.indexer.doc_texts.keys()))
 
         for sym in output:
             if sym == 'NOT':
@@ -199,7 +192,7 @@ class QueryProcessor:
                 if sym.startswith('"') and sym.endswith('"'):
                     phrase = sym[1:-1]
                     pts = self.tokenizer.tokenize(phrase)
-                    docs = self._phrase_search(pts)
+                    docs = self._docs_with_phrase(pts)
                     stack.append(sorted(docs))
                 else:
                     toks = self.tokenizer.tokenize(sym)
@@ -207,7 +200,7 @@ class QueryProcessor:
                         stack.append([])
                     else:
                         t = toks[0]
-                        pl = self.indexer.get_postings(t)
+                        pl = self.indexer.get_postings_list(t)
                         docs = [d for (d, _) in pl]
                         stack.append(docs)
         return stack.pop() if stack else []
@@ -260,7 +253,6 @@ class QueryProcessor:
         k1 = 1.5
         b = 0.75
         N = self.indexer.N
-        # TODO: add k3 = 0 or something
         avgdl = self.indexer.avg_doc_len if self.indexer.avg_doc_len > 0 else 1.0
         q_tf = defaultdict(int)
         for t in q_tokens:
@@ -349,18 +341,3 @@ class QueryProcessor:
         return snippet
 
 
-if __name__ == "__main__":
-    indexer = Indexer()
-    indexer.load()
-    query = QueryProcessor(indexer)
-
-    l = [
-        # "\"000-meter\"",
-        # "pokémon",
-        # "\"security footage\"",
-        # "\"shadowless charizard\"",
-        # "\"harry potter\" AND \"chamber of secrets\"",
-    ]
-
-    for x in l:
-        print(query._eval_boolean(x))
