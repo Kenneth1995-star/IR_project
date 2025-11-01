@@ -8,7 +8,7 @@ the Information Retrieval system.
 This module also preprocesses the input by removing URLs and HTML.
 """
 
-import os, re, nltk
+import os, regex, nltk
 from typing import List, Iterable, Optional
 from nltk.corpus import stopwords
 from queue import Queue
@@ -65,10 +65,10 @@ class Tokenizer:
 
         # Detect tokens using regex patterns.
         # Tokens consists of letters, digits and hyphens
-        self._token_re = re.compile(r"[A-Za-z0-9]+(?:[-][A-Za-z0-9]+)*", flags=re.UNICODE)
+        self._token_re = regex.compile(r"[\p{L}\p{N}]+(?:[-][\p{L}\p{N}]+)*")
 
         # Detect URLs
-        self._url_re = re.compile(r"""(?xi)
+        self._url_re = regex.compile(r"""(?xi)
             \b(
                 (?:https?://|ftp://|file://|mailto:|www\.)
                 [^\s<>'"]+
@@ -76,7 +76,7 @@ class Tokenizer:
         """)
 
         # Detect HTML
-        self._html_re = re.compile(r"<[^>]+>")
+        self._html_re = regex.compile(r"<[^>]+>")
 
         # Enable or disable stemming functionality
         self.use_stemmer = use_stemmer

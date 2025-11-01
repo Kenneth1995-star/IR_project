@@ -2,6 +2,7 @@ import numpy as np
 import marisa_trie
 import os
 import json
+from typing import List
 
 
 class DocumentManager:
@@ -16,6 +17,10 @@ class DocumentManager:
         Initialize mapping and return generator for files
         """
         # Assign IDs
+        # Marisa Tries do not have the fastest lookups, O(|key|)
+        # but they are very simple to use and mmap.
+        # Also supports reverse lookups, so no need to store reverse list
+        # For fully in-memory implementations, a normal dict will be better.
         trie = marisa_trie.Trie(filepaths)
         trie.save(self.ids_path)
         self.N = len(trie)
@@ -40,6 +45,18 @@ class DocumentManager:
             stats = json.load(lf)
         self.N = stats["N"]
         self.mean = stats["mean"]
+
+    def get_keys(self) -> List[str]:
+        return self.path_to_id.keys()
+
+    def get_key(self, doc_id: int) -> str:
+        return self.path_to_id.restore_key(doc_id)
+
+    def get_values(self) -> List[int]:
+        """
+        This only works because the index is static.
+        """
+        return list(range(self.N))
     
     def get_id(self, key) -> int:
         return self.path_to_id.get(key)
