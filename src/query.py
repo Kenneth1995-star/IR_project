@@ -35,7 +35,7 @@ class QueryProcessor:
     # here we are checking if the query contains Boolean logic or phrase syntax
     def _is_boolean_or_phrase(self, query: str) -> bool:
         # here we are looking for quotes or AND/OR/NOT keywords or parentheses
-        return ('"' in query) or bool(re.search(r"\b(AND|OR|NOT)\b", query, flags=re.I)) or ('(' in query or ')' in query)
+        return ('"' in query) or bool(re.search(r"\b(AND|OR|NOT)\b", query, flags=re.I)) 
 
     # --- BASIC BOOLEAN OPERATORS (LIST MERGING) ---
 
@@ -222,12 +222,19 @@ class QueryProcessor:
             q_tf[t] += 1
 
         # here we are computing query weights (log-tf * idf)
+        idf = dict()
         q_weights = {}
         for t, f in q_tf.items():
-            idf_t = self.indexer.idf.get(t, 0.0)
-            if idf_t == 0.0:
+            # df of term
+            df_t = self.indexer.get_meta(t)
+            if df_t is None:
                 continue
-            q_weights[t] = (1.0 + math.log(f)) * idf_t
+            df_t = df_t[2]
+            idf_t = math.log10(self.indexer.N() / df_t)
+            if idf_t <= 0:
+                continue
+            idf[t] = idf_t
+            q_weights[t] = (1.0 + math.log10(f)) * idf_t
 
         q_norm = math.sqrt(sum(w*w for w in q_weights.values()))
         if q_norm == 0.0:
@@ -236,32 +243,36 @@ class QueryProcessor:
         scores = defaultdict(float)
         # here we are computing dot product between query and document vectors
         for t, q_w in q_weights.items():
-            postings = self.indexer.tfidf_postings.get(t, {})
-            if candidate_docs is not None:
+            postings = {key: value for key, value in self.indexer.get_postings(t)}
+            if candidate_docs:
                 for d in candidate_docs:
-                    dw = postings.get(d)
+                    dw = len(postings[d]) # tf
+                    dw = 1 + math.log10(dw) # Guaranteed > 0
+                    dw *= idf[t]
                     if dw:
                         scores[d] += q_w * dw
             else:
-                for d, dw in postings.items():
+                for d, _ in postings.items():
+                    dw = len(postings[d]) # tf
+                    dw = 1 + math.log10(dw) # Guaranteed > 0
+                    dw *= idf[t]
                     scores[d] += q_w * dw
 
         # here we are normalizing by vector length to compute cosine similarity
         final = []
         for d, dot in scores.items():
-            doc_norm = self.indexer.doc_norms.get(d, 0.0)
-            if doc_norm > 0:
-                final.append((d, dot / (q_norm * doc_norm)))
+            inverse_doc_norm = self.indexer.get_ltc()[d]
+            if inverse_doc_norm > 0:
+                final.append((d, dot * inverse_doc_norm / q_norm))
         final.sort(key=lambda x: x[1], reverse=True)
         return final[:top_k]
 
     # here we are implementing BM25 ranking (a more advanced probabilistic scoring method)
-    def _rank_bm25(self, q_tokens: List[str], candidate_docs: Optional[List[str]] = None, top_k: int = 10) -> List[Tuple[str, float]]:
-        k1 = 1.5
-        b = 0.75
-        N = self.indexer.N
-        # TODO: add k3 = 0 or something
-        avgdl = self.indexer.avg_doc_len if self.indexer.avg_doc_len > 0 else 1.0
+    def _rank_bm25(self, q_tokens: List[str], candidate_docs: Optional[List[str]] = None, top_k: int = 10,
+                   k1: float = 1.5, k3: float = 1.5, b: float = 0.75) -> List[Tuple[str, float]]:
+        N = self.indexer.N()
+        # avgdl = self.indexer.avg_doc_len if self.indexer.avg_doc_len > 0 else 1.0
+        avgdl = self.indexer.doc_mean()
         q_tf = defaultdict(int)
         for t in q_tokens:
             q_tf[t] += 1
@@ -270,17 +281,22 @@ class QueryProcessor:
         candset = set(candidate_docs) if candidate_docs is not None else None
 
         for t, qf in q_tf.items():
-            df = self.indexer.df.get(t, 0)
-            if df == 0:
+            # df = self.indexer.df.get(t, 0)
+            df = self.indexer.get_meta(t)
+            if df is None:
                 continue
-            idf_t = math.log(1 + (N - df + 0.5) / (df + 0.5))
-            postings = self.indexer.get_postings_list(t)
-            for d, tf in postings:
+            df = df[2]
+            # idf_t = math.log(1 + (N - df + 0.5) / (df + 0.5))
+            idf_t = math.log(N / df) # follow slides -> no smoothing
+            # postings = self.indexer.get_postings_list(t)
+            for d, tf in self.indexer.get_tfs(t):
+                # Skip docs that are filtered out
                 if candset is not None and d not in candset:
                     continue
-                dl = self.indexer.doc_lengths.get(d, 0)
+                dl = self.indexer.get_doc_length(d)
                 denom = tf + k1 * (1 - b + b * (dl / avgdl))
                 score_t = idf_t * ((tf * (k1 + 1)) / denom)
+                score_t *= (k3 + 1) * q_tf[t] / (k3 + q_tf[t])
                 scores[d] += score_t
         final = [(d, s) for d, s in scores.items()]
         final.sort(key=lambda x: x[1], reverse=True)
@@ -330,6 +346,10 @@ class QueryProcessor:
 
     # here we are extracting a short text snippet showing where query terms occur
     def _snippet(self, doc_id: str, q_tokens: List[str], window_chars: int = 60) -> str:
+        """
+        Doesn't work with stemming, needs to stem whole doc, very expensive
+        """
+        return
         text = self.indexer.doc_texts.get(doc_id, "")
         lt = text.lower()
         first = None
@@ -350,17 +370,19 @@ class QueryProcessor:
 
 
 if __name__ == "__main__":
-    indexer = Indexer()
+    indexer = Indexer(path="index2/")
     indexer.load()
     query = QueryProcessor(indexer)
 
     l = [
-        # "\"000-meter\"",
+        # "3million",
         # "pokémon",
         # "\"security footage\"",
         # "\"shadowless charizard\"",
-        # "\"harry potter\" AND \"chamber of secrets\"",
+        # "charizard AND shadowless",
+        # "information retrieval",
+        "\"machine learning\""
     ]
 
     for x in l:
-        print(query._eval_boolean(x))
+        print(query.search(x, method="bm25"))

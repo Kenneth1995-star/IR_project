@@ -1,6 +1,5 @@
 from tokenizer import Tokenizer
 from DocumentManager import DocumentManager
-from Lexicon import Lexicon
 from collections import defaultdict
 from typing import Optional, Any, Literal, Dict, List, Tuple, Iterable
 from functools import partial
@@ -8,6 +7,8 @@ from Extras import vbyte_decode, vbyte_encode, delta_decode, delta_encode
 import msgpack, os, glob, io, mmap, sys
 import zstandard as zstd
 import marisa_trie
+import numpy as np
+import math
 
 
 class Indexer:
@@ -70,13 +71,22 @@ class Indexer:
             self._write_block(dictionary, block_count)
 
         self._merge_blocks()
-        self.manager.finalize()
+        self.manager.finalize(*self.compute_stats())
 
     def get_doc_keys(self) -> List[str]:
         return self.manager.get_keys()
 
     def get_doc_ids(self) -> List[int]:
         return self.manager.get_values()
+
+    def N(self) -> int:
+        return self.manager.N
+
+    def doc_mean(self) -> float:
+        return self.manager.mean
+
+    def get_doc_length(self, doc_id) -> int:
+        return self.manager.lengths[doc_id]
 
     def get_meta(self, term: str):
         """
@@ -93,6 +103,14 @@ class Indexer:
         raw = self.mm[off:off+ln]
         return self._decode_term_block(raw)
 
+    def get_tfs(self, term: str) -> List[Tuple[int, int]]:
+        meta = self.get_meta(term)
+        if not meta:
+            return []
+        off, ln, _df = meta
+        raw = self.mm[off:off+ln]
+        return self._decode_term_block(raw, False)
+
     def iter_prefix(self, prefix: str, limit: int = 50):
         """
         Predictive/prefix lookup for terms beginning with `prefix`.
@@ -103,6 +121,35 @@ class Indexer:
             count += 1
             if count >= limit:
                 break
+
+    def compute_stats(self):
+        # Traverse all terms twice: for max tf and for computing the stats
+        max_tf = np.zeros(self.N(), dtype=np.uint32)
+        for term in self.trie.keys():
+            for doc_id, tf in self.get_tfs(term):
+                if tf > max_tf[doc_id]:
+                    max_tf[doc_id] = tf
+
+        ltc_norms = np.zeros(self.N(), dtype=np.float32)
+        ntc_norms = np.zeros(self.N(), dtype=np.float32)
+        lnc_norms = np.zeros(self.N(), dtype=np.float32)
+        atc_norms = np.zeros(self.N(), dtype=np.float32)
+        for term, meta in self.trie.iteritems():
+            df = meta[2]
+            idf = math.log10(self.N() / df) # Guaranteed > 0, otherwise term doesn't exist
+            for doc_id, tf in self.get_tfs(term):
+                w_tf = 1.0 + math.log10(tf)
+                ltc_norms[doc_id] += (w_tf * idf) ** 2
+                ntc_norms[doc_id] += (tf * idf) ** 2
+                atc_norms[doc_id] += ((0.5 + 0.5 * (tf / max_tf[doc_id])) * idf) ** 2
+                lnc_norms[doc_id] += (w_tf) ** 2
+        
+        norms: np.ndarray = np.stack((ltc_norms, ntc_norms, atc_norms, lnc_norms))
+        norms = 1 / np.sqrt(norms)
+        return max_tf, norms
+
+    def get_ltc(self):
+        return self.manager.get_norms()[0]
 
     def load(self):
         """
@@ -244,52 +291,63 @@ class Indexer:
 
     def _encode_term_block(self, postings: List[Tuple[int, List[int]]]) -> bytes:
         """
-        postings: list of (doc_id, positions[]) with doc_ids sorted, positions sorted
+        postings: list of (doc_id, positions[]) with doc_ids sorted, positions sorted.
+        Stores docIDs and TFs upfront so scoring can skip the positions blob.
         """
         buf = io.BytesIO()
-        # docIDs (delta + vbyte)
+
         docids = [doc for doc, _ in postings]
+        tfs = [len(pos) for _, pos in postings]
+
         buf.write(vbyte_encode([len(docids)]))
         buf.write(vbyte_encode(list(delta_encode(docids))))
+        buf.write(vbyte_encode(tfs))
 
-        # positions (per doc: gap-encode then vbyte)
         for _, pos in postings:
-            gaps = [pos[0]] + [pos[i]-pos[i-1] for i in range(1, len(pos))]
-            buf.write(vbyte_encode([len(gaps)]))
+            # gap-encode positions
+            gaps = [pos[0]] + [pos[i] - pos[i - 1] for i in range(1, len(pos))]
             buf.write(vbyte_encode(gaps))
+
         return buf.getvalue()
 
-    def _decode_term_block(self, raw: bytes) -> List[Tuple[int, List[int]]]:
+
+    def _decode_term_block(self, raw: bytes, include_positions: bool = True):
         """
+        If include_positions=True (default), returns List[(doc_id, positions[])].
+        If include_positions=False, returns List[(doc_id, tf)] and skips positions decoding.
         """
         it = iter(vbyte_decode(raw))
-        # number of docs
         num_docs = next(it)
-        # docids
+
+        # docIDs
         docid_deltas = [next(it) for _ in range(num_docs)]
         docids = list(delta_decode(docid_deltas))
+
+        # tfs
+        tfs = [next(it) for _ in range(num_docs)]
+
+        if not include_positions:
+            return zip(docids, tfs)
+
+        # Decode positions using tfs counts
         postings = []
-        for d in docids:
-            plen = next(it)
-            gaps = [next(it) for _ in range(plen)]
-            # rebuild positions
-            pos = [] 
+        for d, tf in zip(docids, tfs):
+            gaps = [next(it) for _ in range(tf)]
+            # rebuild absolute positions
             acc = 0
+            pos = []
             for g in gaps:
                 acc += g
                 pos.append(acc)
             postings.append((d, pos))
+
         return postings
 
-    def _build_marisa_lexicon(self, items: Iterable[Tuple[str, int, int, int]]):
+    def _build_marisa_lexicon(self, items: Iterable[Tuple[str, Tuple[int, int, int]]]):
         """
         items: iterable of (term, off, length, df)
         """
-        keys, recs = [], []
-        for term, off, length, df in items:
-            keys.append(term)
-            recs.append((off, length, df))
-        self.trie = marisa_trie.RecordTrie(self._record_fmt, zip(keys, recs))
+        self.trie = marisa_trie.RecordTrie(self._record_fmt, items)
         self.trie.save(self.lexicon_path)
         self.trie.mmap(self.lexicon_path)
 
@@ -299,7 +357,7 @@ class Indexer:
         Writes postings and lexicon files
         """
         # Stream-write postings; collect (term, off, len, df) for lexicon
-        meta: List[Tuple[str, int, int, int]] = []
+        meta: List[Tuple[str, Tuple[int, int, int]]] = []
         off = 0
         with open(self.postings_path, "wb") as f:
             while x := next(posting_stream, None):
@@ -308,7 +366,7 @@ class Indexer:
                 ln = len(block)
                 f.write(block)
                 df = len(postings)
-                meta.append((term, off, ln, df))
+                meta.append((term, (off, ln, df)))
                 off += ln
 
         # Build mmappable lexicon
@@ -325,14 +383,15 @@ def filestream():
         yield path
 
 if __name__ == "__main__":
-    indexer = Indexer()
+    indexer = Indexer(path="index/")
 
     indexer.build_index(filestream(), bytes_limit=2_000_000_000)
     # indexer._merge_blocks()
 
     # indexer.load()
-    print(indexer.get_meta("000-meter"))
-    print(indexer.get_postings("000-meter"))
+    print(indexer.get_meta("artificial"))
+    print(indexer.get_postings("artificial"))
+    print(vars(indexer.manager))
     # gen = indexer.iter_prefix("ab")
     # while x := next(gen, None):
     #     print(x)

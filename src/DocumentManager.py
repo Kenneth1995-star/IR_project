@@ -9,8 +9,9 @@ class DocumentManager:
     def __init__(self, path="index/"):
         self.path = path
         self.ids_path = os.path.join(path, "docids.marisa")
-        self.lengths_path = os.path.join(path, "doclengths.npy")
+        self.ints_path = os.path.join(path, "ints.npy")
         self.stats_path = os.path.join(path, "stats.json")
+        self.norms_path = os.path.join(path, "norms.npy")
 
     def initialize(self, filepaths):
         """
@@ -29,17 +30,30 @@ class DocumentManager:
         for key in self.path_to_id.keys():
             yield key
 
-    def finalize(self):
+    def finalize(self, max_tf, norms):
         self.mean = np.mean(self.lengths, dtype=np.float64)
-        np.save(self.lengths_path, self.lengths_path)
-        self.lengths = np.load(self.lengths_path, mmap_mode="r")
 
+        # 0: lengths, 1: max_tf
+        np.save(self.ints_path, np.stack((self.lengths, max_tf), dtype=np.uint32))
+
+        np.save(self.norms_path, norms)
+
+        stats = {
+            "N": self.N, 
+            "mean": self.mean
+        }
         with open(self.stats_path, "w", encoding="utf8") as f:
-            json.dump({"N": self.N, "mean": self.mean}, f, ensure_ascii=False)
+            json.dump(stats, f, ensure_ascii=False)
+
+        self.load()
 
     def load(self):
         self.path_to_id = marisa_trie.Trie().mmap(self.ids_path)
-        self.lengths = np.load(self.lengths_path, mmap_mode="r")
+
+        ints =  np.load(self.ints_path, mmap_mode="r")
+        self.lengths = ints[0]
+        self.max_tf = ints[1]
+        self.norms = np.load(self.norms_path, mmap_mode="r")
 
         with open(self.stats_path, "r", encoding="utf8") as lf:
             stats = json.load(lf)
@@ -54,9 +68,12 @@ class DocumentManager:
 
     def get_values(self) -> List[int]:
         """
-        This only works because the index is static.
+        Get all Doc ids in order
         """
         return list(range(self.N))
+
+    def get_norms(self):
+        return self.norms
     
     def get_id(self, key) -> int:
         return self.path_to_id.get(key)
