@@ -1,3 +1,4 @@
+import atexit
 import glob
 import io
 import math
@@ -13,9 +14,9 @@ import msgpack
 import numpy as np
 import zstandard as zstd
 
-from DocumentManager import DocumentManager
-from Extras import delta_decode, delta_encode, vbyte_decode, vbyte_encode
-from Tokenizer import Tokenizer
+from src.DocumentManager import DocumentManager
+from src.Extras import delta_decode, delta_encode, vbyte_decode, vbyte_encode
+from src.Tokenizer import Tokenizer
 
 
 class Indexer:
@@ -42,6 +43,7 @@ class Indexer:
                 a + b + "c" for b in "tnp" for a in "lnabL"
             )
         }
+        atexit.register(self.close)
 
     def build_index(self, filepaths, bytes_limit=50_000_000):
         """
@@ -169,6 +171,30 @@ class Indexer:
             if count >= limit:
                 break
 
+    def load(self):
+        """
+        Loads previously saved postings and lexicon file.
+        """
+        self.close()
+        self.postings_fd = open(self.postings_path, "rb")
+        self.mm = mmap.mmap(
+            self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ
+        )
+        self.trie = marisa_trie.RecordTrie(self._record_fmt)
+        self.trie.mmap(self.lexicon_path)
+        self.manager.load()
+
+    def close(self):
+        """
+        Close open files
+        """
+        if self.mm:
+            self.mm.close()
+            self.mm = None
+        if self.postings_fd:
+            self.postings_fd.close()
+            self.postings_fd = None
+
     def _compute_stats(self):
         """
         Compute all document norms, lengths, averages, etc.
@@ -227,25 +253,6 @@ class Indexer:
 
         norms = 1 / np.sqrt(norms)
         return max_tf, unique_terms, avg_tf, norms
-
-    def load(self):
-        """
-        Loads previously saved postings and lexicon file.
-        """
-        self.postings_fd = open(self.postings_path, "rb")
-        self.mm = mmap.mmap(
-            self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ
-        )
-        self.trie = marisa_trie.RecordTrie(self._record_fmt)
-        self.trie.mmap(self.lexicon_path)
-        self.manager.load()
-
-    def close(self):
-        """
-        Close open files
-        """
-        self.mm.close()
-        self.postings_fd.close()
 
     def _write_block(self, dictionary, block_id: int) -> None:
         """

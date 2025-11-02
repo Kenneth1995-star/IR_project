@@ -12,8 +12,8 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from Indexer import Indexer
-from Smart import DF_FUNCS, NORM_FUNCS, TF_FUNCS
+from src.Indexer import Indexer
+from src.Smart import DF_FUNCS, NORM_FUNCS, TF_FUNCS
 
 
 class QueryProcessor:

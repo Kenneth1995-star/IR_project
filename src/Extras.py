@@ -1,5 +1,4 @@
 # src/extras.py
-# here, we are adding standard IR evaluation helpers and keeping them small and correct.
 
 import math
 from typing import Iterable, List
@@ -41,7 +40,8 @@ def dcg_at_k(relevant_set: Iterable[str], ranked: List[str], k: int) -> float:
 def ndcg_at_k(relevant_set: Iterable[str], ranked: List[str], k: int) -> float:
     # here, we are computing normalized DCG by dividing by IDCG
     rset = set(relevant_set)
-    # here, IDCG for binary relevance with R relevant docs is sum_{i=0..R-1} 1/log2(i+2)
+    # here, IDCG for binary relevance
+    # with R relevant docs is sum_{i=0..R-1} 1/log2(i+2)
     R = min(len(rset), k)
     if R == 0:
         return 0.0
