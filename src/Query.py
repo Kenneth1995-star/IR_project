@@ -5,16 +5,15 @@ QueryProcessor: efficient inverted-index based retrieval.
 Implements:
  - Boolean queries: AND, OR, NOT, parentheses (shunting-yard + merge ops)
  - Phrase queries: "exact phrase"
- - Ranked retrieval: TF-IDF cosine and BM25
+ - Ranked retrieval: All TF-IDF SMART variations and BM25
 """
-from typing import List, Tuple, Optional, Any, Dict, Literal
-from collections import defaultdict
 import math
 import re
+from collections import defaultdict
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from tokenizer import Tokenizer
 from Indexer import Indexer
-from Smart import DF_FUNCS, TF_FUNCS, NORM_FUNCS
+from Smart import DF_FUNCS, NORM_FUNCS, TF_FUNCS
 
 
 class QueryProcessor:
@@ -24,15 +23,19 @@ class QueryProcessor:
 
     # --- BOOLEAN AND PHRASE PARSING HELPERS ---
 
-    # Split query into tokens, operators and phrases
     def _split_query(self, query: str) -> List[str]:
-        token_pattern = r'(\"[^\"]+\"|\(|\)|\bAND\b|\bOR\b|\bNOT\b|[^()\s]+)'
+        """
+        Split the query into tokens, operators and phrases
+        """
+        token_pattern = r"(\"[^\"]+\"|\(|\)|\bAND\b|\bOR\b|\bNOT\b|[^()\s]+)"
         parts = re.findall(token_pattern, query, flags=re.I)
         # here we are cleaning whitespace and returning only non-empty parts
         return [p.strip() for p in parts if p.strip()]
 
-    # See if it contains any boolean operators
     def _is_boolean(self, parts: List[str]) -> bool:
+        """
+        Checks if a list contains any boolean operators
+        """
         return any(op in parts for op in ["AND", "OR", "NOT"])
 
     # --- BASIC BOOLEAN OPERATORS (LIST MERGING) ---
@@ -46,7 +49,9 @@ class QueryProcessor:
         out = []
         while i < len(a) and j < len(b):
             if a[i] == b[j]:
-                out.append(a[i]); i += 1; j += 1
+                out.append(a[i])
+                i += 1
+                j += 1
             elif a[i] < b[j]:
                 i += 1
             else:
@@ -64,37 +69,45 @@ class QueryProcessor:
         while i < len(a) and j < len(b):
             if a[i] == b[j]:
                 if a[i] != prev:
-                    out.append(a[i]); prev = a[i]
-                i += 1; j += 1
+                    out.append(a[i])
+                    prev = a[i]
+                i += 1
+                j += 1
             elif a[i] < b[j]:
                 if a[i] != prev:
-                    out.append(a[i]); prev = a[i]
+                    out.append(a[i])
+                    prev = a[i]
                 i += 1
             else:
                 if b[j] != prev:
-                    out.append(b[j]); prev = b[j]
+                    out.append(b[j])
+                    prev = b[j]
                 j += 1
 
         while i < len(a):
             if a[i] != prev:
-                out.append(a[i]); prev = a[i]
+                out.append(a[i])
+                prev = a[i]
             i += 1
         # here we are adding any leftover items from list b
         while j < len(b):
             if b[j] != prev:
-                out.append(b[j]); prev = b[j]
+                out.append(b[j])
+                prev = b[j]
             j += 1
         return out
 
     # --- PHRASE SEARCH SUPPORT ---
 
-    def _phrase_search(self, phrase_tokens: List[str]) -> Tuple[List[int], Tuple[List[Tuple[int, int]], int]]:
+    def _phrase_search(
+        self, phrase_tokens: List[str]
+    ) -> Tuple[List[int], Tuple[List[Tuple[int, int]], int]]:
         """
         Returns candidate documents and tf, df
         """
         if not phrase_tokens:
             return [], ([], 0)
-        
+
         maps = []
         for t in phrase_tokens:
             p_list = self.indexer.get_postings(t)
@@ -103,7 +116,6 @@ class QueryProcessor:
 
             # Convert to dict for Doc lookup
             maps.append({doc: positions for doc, positions in p_list})
-
 
         # Docs contained in all terms
         docs = set(maps[0].keys())
@@ -131,7 +143,6 @@ class QueryProcessor:
 
     # --- BOOLEAN QUERY EVALUATION (SHUNTING-YARD + RPN) ---
 
-    # here we are evaluating a Boolean query using the shunting-yard algorithm
     def _shunting_yard(self, tokens: List[str]) -> List[str]:
         """
         Boolean query evaluation using shunting yard, converting to RPN
@@ -147,27 +158,28 @@ class QueryProcessor:
                 nxt = tokens[i + 1]
                 if any(x in ["AND", "OR"] for x in [tok, nxt]):
                     continue
-                if tok not in  ["(", "NOT"] and nxt != ")":
-                    result.append('AND')
+                if tok not in ["(", "NOT"] and nxt != ")":
+                    result.append("AND")
 
         tokens = result
 
-        precedence = {'NOT': 3, 'AND': 2, 'OR': 1}
-        op_stack = [] # operator stack
-        output = [] # RPN
-        pol_stack = [] # positivity check
+        precedence = {"NOT": 3, "AND": 2, "OR": 1}
+        op_stack = []  # operator stack
+        output = []  # RPN
+        pol_stack = []  # positivity check
 
-        def is_op(t): return t.upper() in precedence
+        def is_op(t):
+            return t.upper() in precedence
 
         def emit(tok):
             # push to RPN
             output.append(tok)
 
             # update polarity stack
-            if tok == 'NOT':
+            if tok == "NOT":
                 pos, neg = pol_stack.pop() if pol_stack else (False, False)
                 pol_stack.append((neg, pos))  # NOT swaps polarity
-            elif tok in ('AND', 'OR'):
+            elif tok in ("AND", "OR"):
                 b_pos, b_neg = pol_stack.pop() if pol_stack else (False, False)
                 a_pos, a_neg = pol_stack.pop() if pol_stack else (False, False)
                 pol_stack.append((a_pos or b_pos, a_neg or b_neg))
@@ -177,19 +189,27 @@ class QueryProcessor:
 
         for tok in tokens:
             if is_op(tok):
-                while (op_stack and op_stack[-1] != '(' and
-                    (precedence[op_stack[-1]] > precedence[tok] or
-                        (precedence[op_stack[-1]] == precedence[tok] and tok != "NOT"))):
+                while (
+                    op_stack
+                    and op_stack[-1] != "("
+                    and (
+                        precedence[op_stack[-1]] > precedence[tok]
+                        or (
+                            precedence[op_stack[-1]] == precedence[tok]
+                            and tok != "NOT"
+                        )
+                    )
+                ):
                     emit(op_stack.pop())
                 op_stack.append(tok)
 
-            elif tok == '(':
+            elif tok == "(":
                 op_stack.append(tok)
 
-            elif tok == ')':
-                while op_stack and op_stack[-1] != '(':
+            elif tok == ")":
+                while op_stack and op_stack[-1] != "(":
                     emit(op_stack.pop())
-                if op_stack and op_stack[-1] == '(':
+                if op_stack and op_stack[-1] == "(":
                     op_stack.pop()  # discard '('
             else:
                 # term or phrase token
@@ -200,12 +220,13 @@ class QueryProcessor:
 
         has_pos = pol_stack[-1][0] if pol_stack else False
         if not has_pos:
-            return # Not positive, bad
+            return  # Not positive, bad
         return output
 
     def _rpn(self, tokens: List[str]):
         """
-        Evaluate RPN expression, while filtering out non related queries for ranking
+        Evaluate RPN expression, while filtering out non related
+        queries for ranking
         """
 
         stack: List[List[int]] = []
@@ -216,7 +237,8 @@ class QueryProcessor:
 
         phrase_info = dict()
 
-        # Merge tokens list, removing tokens that don't appear in the list of documents
+        # Merge tokens list, removing tokens that don't appear in
+        # the list of documents
         def token_hit(tokens: List[str], docs: List[int]):
             output = []
             for token in tokens:
@@ -229,14 +251,14 @@ class QueryProcessor:
             return output
 
         for sym in tokens:
-            if sym == 'NOT':
+            if sym == "NOT":
                 a = stack.pop() if stack else []
                 res = [d for d in universe if d not in set(a)]
                 stack.append(res)
 
                 stack_2.pop()
                 stack_2.append([])
-            elif sym == 'AND':
+            elif sym == "AND":
                 b = stack.pop() if stack else []
                 a = stack.pop() if stack else []
                 stack.append(self._intersect_lists(a, b))
@@ -244,7 +266,7 @@ class QueryProcessor:
                 b2 = stack_2.pop() if stack else []
                 a2 = stack_2.pop() if stack else []
                 stack_2.append(token_hit(a2 + b2, stack[-1]))
-            elif sym == 'OR':
+            elif sym == "OR":
                 b = stack.pop() if stack else []
                 a = stack.pop() if stack else []
                 stack.append(self._union_lists(a, b))
@@ -267,7 +289,9 @@ class QueryProcessor:
                         stack_2.append([])
                     else:
                         t = toks[0]
-                        pl = self.indexer.get_tfs(t) # so we don't read the whole block
+                        pl = self.indexer.get_tfs(
+                            t
+                        )  # so we don't read the whole block
                         docs = [d for (d, _) in pl]
                         stack.append(docs)
                         stack_2.append([t])
@@ -277,11 +301,19 @@ class QueryProcessor:
 
     # --- RANKED RETRIEVAL METHODS ---
 
-    def _smart_ranking(self, q_tokens: List[str], scheme: str, candidate_docs: Optional[List[str]] = None, 
-                       top_k: int = 10, phrase_info: Dict[str, Any] = None) -> List[Tuple[str, float]]:
+    def _smart_ranking(
+        self,
+        q_tokens: List[str],
+        scheme: str,
+        candidate_docs: Optional[List[str]] = None,
+        top_k: int = 10,
+        phrase_info: Dict[str, Any] = None,
+    ) -> List[Tuple[str, float]]:
         """
-        TF-IDF ranking with smart variations. Candidate_docs from boolean search. Phrase info contains tf and df of phrases
-        in the query. Using prob idf, one might get no ranking, even if the terms appear in the documents. This is by design.
+        TF-IDF ranking with smart variations. Candidate_docs from boolean
+        search. Phrase info contains tf and df of phrases in the query.
+        Using prob idf, one might get no ranking, even if the terms appear
+        in the documents. This is by design.
         N - df_t / df_t
         """
         d_t = TF_FUNCS[scheme[0]]
@@ -305,7 +337,7 @@ class QueryProcessor:
             var_q = max(q_tf.values())
         elif scheme[4] == "L":
             var_q = sum(q_tf.values()) / len(q_tf)
-            
+
         # Query weights and idf
         N = self.indexer.N()
         idf = dict()
@@ -316,7 +348,7 @@ class QueryProcessor:
                 # phrase dfs are precomputed
                 df_t = phrase_info[t][1]
             else:
-                meta = self.indexer.get_meta(t) 
+                meta = self.indexer.get_meta(t)
                 if meta is None:
                     continue
                 df_t = meta[2]
@@ -376,7 +408,9 @@ class QueryProcessor:
                 if tf_d == 0:
                     continue
 
-                dw = d_t(tf=tf_d, var=var_d) * idf[t]       # doc-side weight for term t in doc d
+                dw = (
+                    d_t(tf=tf_d, var=var_d) * idf[t]
+                )  # doc-side weight for term t in doc d
                 if dw == 0:
                     continue
 
@@ -396,7 +430,7 @@ class QueryProcessor:
             if scheme[2] == "u":
                 second = self.indexer.get_unique_terms(d)
             elif scheme[2] == "b":
-                second : self.indexer.get_byte_length(d)
+                second: self.indexer.get_byte_length(d)
 
             # Only cosine uses first
             inverse_doc_norm = d_n(first=[1.0], second=second, third=third)
@@ -404,25 +438,35 @@ class QueryProcessor:
                 inverse_doc_norm = self.indexer.get_norm(d, scheme[:3])
 
             if inverse_doc_norm > 0:
-                final.append((d, float(dot * inverse_doc_norm * q_norm))) # inversed norm
+                final.append(
+                    (d, float(dot * inverse_doc_norm * q_norm))
+                )  # inversed norm
         final.sort(key=lambda x: x[1], reverse=True)
         return final[:top_k]
 
-    def _rank_bm25(self, q_tokens: List[str], candidate_docs: Optional[List[str]] = None, 
-                   top_k: int = 10, phrase_info: Dict[str, Any] = None, k1: float = 1.5, 
-                   k3: float = 1.5, b: float = 0.75) -> List[Tuple[str, float]]:
+    def _rank_bm25(
+        self,
+        q_tokens: List[str],
+        candidate_docs: Optional[List[str]] = None,
+        top_k: int = 10,
+        phrase_info: Dict[str, Any] = None,
+        k1: float = 1.5,
+        k3: float = 1.5,
+        b: float = 0.75,
+    ) -> List[Tuple[str, float]]:
         """
         bm25 okapi ranking, candidate docs for boolean search
         """
         N = self.indexer.N()
-        # avgdl = self.indexer.avg_doc_len if self.indexer.avg_doc_len > 0 else 1.0
         avgdl = self.indexer.doc_mean()
         q_tf = defaultdict(int)
         for t in q_tokens:
             q_tf[t] += 1
 
         scores = defaultdict(float)
-        candidate_docs = set(candidate_docs) if candidate_docs is not None else None
+        candidate_docs = (
+            set(candidate_docs) if candidate_docs is not None else None
+        )
 
         for t, qf in q_tf.items():
             if t in phrase_info:
@@ -436,7 +480,7 @@ class QueryProcessor:
                 df = df[2]
                 tfs = self.indexer.get_tfs(t)
             # idf_t = math.log(1 + (N - df + 0.5) / (df + 0.5))
-            idf_t = math.log(N / df) # follow slides -> no smoothing
+            idf_t = math.log(N / df)  # follow slides -> no smoothing
 
             for d, tf in tfs:
                 # Skip docs that are filtered out
@@ -454,11 +498,16 @@ class QueryProcessor:
     # --- PUBLIC SEARCH FUNCTION ---
 
     # here we are defining the main search() function that users will call
-    def search(self, query: str, top_k: int = 10, method: Literal["tfidf", "bm25"] = "tfidf",
-               scheme: str = "ltc.ltc"):
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        method: Literal["tfidf", "bm25"] = "tfidf",
+        scheme: str = "ltc.ltc",
+    ):
         """
-        Main search function. Accepts boolean / phrase / normal queries. 
-        Methods implemented: TF-IDF, BM25. 
+        Main search function. Accepts boolean / phrase / normal queries.
+        Methods implemented: TF-IDF, BM25.
         """
         method = method.lower()
         if method not in ("tfidf", "bm25"):
@@ -472,7 +521,9 @@ class QueryProcessor:
         if self._is_boolean(parts):
             rpn = self._shunting_yard(parts)
             if rpn is None:
-                raise ValueError("Query must include at least one positive clause")
+                raise ValueError(
+                    "Query must include at least one positive clause"
+                )
             candidates, q_tokens, phrase_info = self._rpn(rpn)
             if not candidates:
                 return []
@@ -488,67 +539,11 @@ class QueryProcessor:
                     q_tokens.extend(self.tokenizer.tokenize(part))
             if not q_tokens:
                 return []
-        
+
         if method == "tfidf":
-            ranked = self._smart_ranking(q_tokens, scheme, candidates, top_k, phrase_info)
+            ranked = self._smart_ranking(
+                q_tokens, scheme, candidates, top_k, phrase_info
+            )
         else:
             ranked = self._rank_bm25(q_tokens, candidates, top_k, phrase_info)
         return [(d, s) for d, s in ranked]
-
-    # --- SNIPPET GENERATION (for display) ---
-
-    # here we are extracting a short text snippet showing where query terms occur
-    def _snippet(self, doc_id: str, q_tokens: List[str], window_chars: int = 60) -> str:
-        """
-        Doesn't work with stemming, needs to stem whole doc, very expensive
-        """
-        return
-        # text = self.indexer.doc_texts.get(doc_id, "")
-        # lt = text.lower()
-        # first = None
-        # for t in q_tokens:
-        #     pos = lt.find(t)
-        #     if pos >= 0 and (first is None or pos < first):
-        #         first = pos
-        # if first is None:
-        #     return text[:200] + ("..." if len(text) > 200 else "")
-        # s = max(0, first - window_chars)
-        # e = min(len(text), first + window_chars)
-        # snippet = text[s:e].strip()
-        # if s > 0:
-        #     snippet = "..." + snippet
-        # if e < len(text):
-        #     snippet = snippet + "..."
-        # return snippet
-
-
-if __name__ == "__main__":
-    indexer = Indexer(path="index/")
-    indexer.load()
-    query = QueryProcessor(indexer)
-
-    # l = [
-    #     "INFORMATION RETRIEVAL",
-    #     "INFORMATION AND RETRIEVAL",
-    #     "INFORMATION OR RETRIEVAL",
-    #     "\"MONKEY BALLS\"",
-    #     "\"NATURAL LANGUAGE PROCESSING\" AND \"ARTIFICIAL INTELLIGENCE AI SIMULATION\" OR BELGIUM",
-    #     "LATTE AND MACHA OR BELGIUM"
-    # ]
-
-    l = [
-        "\"HARRY POTTER\"",
-        "\"HARRY POTTER\" AND \"CHAMBER OF SECRETS\"",
-        "SHADOWLESS AND CHARIZARD",
-        "100-meters pokémon"
-    ]
-    # schemes = [a+b+c for c in "ncub" for b in "ntp" for a in "nlabL"]
-    # for qqq in schemes:
-    #     for ddd in schemes:
-    #         print(f"{ddd}.{qqq}")
-    #         for x in l:
-    #             print(query.search(x, method="tfidf", scheme=f"{ddd}.{qqq}"))
-
-
-    for x in l:
-        print(query.search(x, method="bm25", scheme=f"lpb.Ltb"))

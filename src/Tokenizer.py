@@ -8,16 +8,18 @@ the Information Retrieval system.
 This module also preprocesses the input by removing URLs and HTML.
 """
 
-import os, re, nltk
-from typing import List, Iterable, Optional
-from nltk.corpus import stopwords
-from queue import Queue
-from threading import Thread
+import os
+import re
 from concurrent.futures import ProcessPoolExecutor
 from itertools import islice
+from typing import Iterable, List, Optional
+
+import nltk
+from nltk.corpus import stopwords
 
 # Worker for multi processing
 _worker_tokenizer = None
+
 
 def _init_worker(stopwords_list, use_stemmer, nltk_dir):
     # Build a Tokenizer in each process without redownloading resources.
@@ -26,12 +28,14 @@ def _init_worker(stopwords_list, use_stemmer, nltk_dir):
         custom_stopwords=stopwords_list,
         use_stemmer=use_stemmer,
         nltk_dir=nltk_dir,
-        nltk_download=False
+        nltk_download=False,
     )
+
 
 def _tokenize_batch(texts):
     # texts: list[str]
-    return [ _worker_tokenizer.tokenize(t) for t in texts if t is not None ]
+    return [_worker_tokenizer.tokenize(t) for t in texts if t is not None]
+
 
 class Tokenizer:
     """
@@ -51,8 +55,14 @@ class Tokenizer:
         use_stemmer : bool
             Whether to apply stemming using Porter Stemmer.
     """
-    def __init__(self, custom_stopwords: Optional[Iterable[str]] = None, use_stemmer: bool = True, 
-                 nltk_dir="nltk_data", nltk_download: bool = True):
+
+    def __init__(
+        self,
+        custom_stopwords: Optional[Iterable[str]] = None,
+        use_stemmer: bool = True,
+        nltk_dir="nltk_data",
+        nltk_download: bool = True,
+    ):
 
         self.nltk_dir = nltk_dir
         # nltk stopwords and stemmer
@@ -61,19 +71,27 @@ class Tokenizer:
             nltk.data.path.append(nltk_dir)
             nltk.download("stopwords", download_dir=nltk_dir)
             nltk.download("punkt", download_dir=nltk_dir)
-        self.stopwords = set(custom_stopwords) if custom_stopwords is not None else stopwords.words("english")
+        self.stopwords = (
+            set(custom_stopwords)
+            if custom_stopwords is not None
+            else stopwords.words("english")
+        )
 
         # Detect tokens using regex patterns.
         # Tokens consists of letters, digits and hyphens
-        self._token_re = re.compile(r"[A-Za-z0-9]+(?:[-][A-Za-z0-9]+)*", flags=re.UNICODE)
+        self._token_re = re.compile(
+            r"[A-Za-z0-9]+(?:[-][A-Za-z0-9]+)*", flags=re.UNICODE
+        )
 
         # Detect URLs
-        self._url_re = re.compile(r"""(?xi)
+        self._url_re = re.compile(
+            r"""(?xi)
             \b(
                 (?:https?://|ftp://|file://|mailto:|www\.)
                 [^\s<>'"]+
             )
-        """)
+        """
+        )
 
         # Detect HTML
         self._html_re = re.compile(r"<[^>]+>")
@@ -82,8 +100,8 @@ class Tokenizer:
         self.use_stemmer = use_stemmer
         if self.use_stemmer:
             from nltk.stem.porter import PorterStemmer
-            self.stemmer = PorterStemmer()
 
+            self.stemmer = PorterStemmer()
 
     def tokenize(self, text: str) -> List[str]:
         """
@@ -107,7 +125,7 @@ class Tokenizer:
         Returns
         -------
         List[str]
-            A list of cleaned, normalized tokens ready for indexing or querying.
+            A list of normalized tokens ready for indexing or querying.
         """
         if text is None:
             return []
@@ -116,7 +134,7 @@ class Tokenizer:
 
         # HTML
         text = self._html_re.sub(" ", text)
-    
+
         # Remove urls starting with <protocol>://<url> or www.<url>
         text = self._url_re.sub(" ", text)
 
@@ -147,7 +165,13 @@ class Tokenizer:
             for token in self.tokenize(text):
                 yield token
 
-    def token_stream_mp(self, stream: Iterable[str], workers: Optional[int] = None, batch_size: int = 128, prefetch_batches: int = 4):
+    def token_stream_mp(
+        self,
+        stream: Iterable[str],
+        workers: Optional[int] = None,
+        batch_size: int = 128,
+        prefetch_batches: int = 4,
+    ):
         """
         Yield tokens using multiple processes.
         - stream: an iterator/generator of strings
@@ -155,8 +179,10 @@ class Tokenizer:
         - batch_size: how many texts per task sent to a worker
         - prefetch_batches: how many batches to keep in-flight
         """
-        # Helper: turn the (possibly infinite) stream into fixed-size lists
-        # Shipping one short string per process call is dominated by IPC overhead. Batching amortizes that.
+
+        # Helper: turn the stream into fixed-size lists
+        # Shipping one short string per process call is dominated by
+        # IPC overhead. Batching amortizes that.
         # Or so the AI says
         def batched(it, n):
             it = iter(it)
@@ -166,10 +192,11 @@ class Tokenizer:
                     return
                 yield chunk
 
-        with ProcessPoolExecutor(max_workers=workers, initializer=_init_worker,
-                                 initargs=(self.stopwords, self.use_stemmer, self.nltk_dir)) as ex:
-
-            # Submit batches and keep a small queue of futures to avoid unbounded memory
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_init_worker,
+            initargs=(self.stopwords, self.use_stemmer, self.nltk_dir),
+        ) as ex:
             in_flight = []
             batches = batched(stream, batch_size)
 
@@ -184,7 +211,9 @@ class Tokenizer:
             while in_flight:
                 # Pop the oldest future to preserve order
                 fut = in_flight.pop(0)
-                token_lists = fut.result()  # [[tokens for doc 1], [tokens for doc 2], ...]
+                token_lists = (
+                    fut.result()
+                )  # [[tokens for doc 1], [tokens for doc 2], ...]
                 # Immediately submit the next batch (if any)
                 if b := next(batches, None):
                     in_flight.append(ex.submit(_tokenize_batch, b))
@@ -193,18 +222,3 @@ class Tokenizer:
                 for tokens in token_lists:
                     for tok in tokens:
                         yield tok
-
-
-if __name__ == "__main__":
-    import glob
-    def filestream():
-        sample_dir = os.path.join("data", "wikipedia-movies")
-        paths = sorted(glob.glob(os.path.join(sample_dir, "*")))
-        for path in paths:
-            yield path
-
-    tokenizer = Tokenizer()
-    import DocumentManager
-    gen = tokenizer.token_stream(DocumentManager.DocumentManager().read_document_stream(filestream()))
-    while x := next(gen, None):
-        print(x)

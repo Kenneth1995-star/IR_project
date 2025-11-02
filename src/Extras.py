@@ -1,10 +1,13 @@
 # src/extras.py
 # here, we are adding standard IR evaluation helpers and keeping them small and correct.
 
-from typing import List, Iterable
 import math
+from typing import Iterable, List
 
-def precision_at_k(relevant: Iterable[str], ranked: List[str], k: int) -> float:
+
+def precision_at_k(
+    relevant: Iterable[str], ranked: List[str], k: int
+) -> float:
     # here, we are computing precision@k
     if k <= 0:
         return 0.0
@@ -12,6 +15,7 @@ def precision_at_k(relevant: Iterable[str], ranked: List[str], k: int) -> float:
     topk = ranked[:k]
     hits = sum(1 for d in topk if d in relevant_set)
     return hits / float(k)
+
 
 def recall_at_k(relevant: Iterable[str], ranked: List[str], k: int) -> float:
     # here, we are computing recall@k
@@ -22,6 +26,7 @@ def recall_at_k(relevant: Iterable[str], ranked: List[str], k: int) -> float:
     hits = sum(1 for d in topk if d in relevant_set)
     return hits / float(len(relevant_set))
 
+
 def dcg_at_k(relevant_set: Iterable[str], ranked: List[str], k: int) -> float:
     # here, we are computing DCG with binary relevance by default
     rset = set(relevant_set)
@@ -31,6 +36,7 @@ def dcg_at_k(relevant_set: Iterable[str], ranked: List[str], k: int) -> float:
         denom = math.log2(i + 2)
         dcg += (2**rel - 1) / denom
     return dcg
+
 
 def ndcg_at_k(relevant_set: Iterable[str], ranked: List[str], k: int) -> float:
     # here, we are computing normalized DCG by dividing by IDCG
@@ -44,8 +50,11 @@ def ndcg_at_k(relevant_set: Iterable[str], ranked: List[str], k: int) -> float:
         return 0.0
     return dcg_at_k(rset, ranked, k) / idcg
 
+
 # here, we add Average Precision and MAP for stronger evaluation evidence
-def average_precision(relevant: Iterable[str], ranked: List[str], k: int = None) -> float:
+def average_precision(
+    relevant: Iterable[str], ranked: List[str], k: int = None
+) -> float:
     rset = set(relevant)
     if k is None:
         k = len(ranked)
@@ -59,11 +68,15 @@ def average_precision(relevant: Iterable[str], ranked: List[str], k: int = None)
         return 0.0
     return sum_prec / float(len(rset))
 
-def mean_average_precision(qrels: List[Iterable[str]], ranked_lists: List[List[str]], k: int = None) -> float:
+
+def mean_average_precision(
+    qrels: List[Iterable[str]], ranked_lists: List[List[str]], k: int = None
+) -> float:
     aps = []
     for rel, ranked in zip(qrels, ranked_lists):
         aps.append(average_precision(rel, ranked, k))
     return sum(aps) / float(len(aps)) if aps else 0.0
+
 
 def reciprocal_rank(relevant: Iterable[str], ranked: List[str]) -> float:
     rset = set(relevant)
@@ -72,9 +85,13 @@ def reciprocal_rank(relevant: Iterable[str], ranked: List[str]) -> float:
             return 1.0 / float(i + 1)
     return 0.0
 
-def mean_reciprocal_rank(qrels: List[Iterable[str]], ranked_lists: List[List[str]]) -> float:
+
+def mean_reciprocal_rank(
+    qrels: List[Iterable[str]], ranked_lists: List[List[str]]
+) -> float:
     rr = [reciprocal_rank(r, rl) for r, rl in zip(qrels, ranked_lists)]
     return sum(rr) / float(len(rr)) if rr else 0.0
+
 
 def vbyte_encode(nums):
     """
@@ -92,18 +109,22 @@ def vbyte_encode(nums):
                 break
     return bytes(out)
 
+
 def vbyte_decode(buf):
     """
     Decodes encoded list of nums
     """
-    n = 0; shift = 0
+    n = 0
+    shift = 0
     for b in buf:
         n |= (b & 0x7F) << shift
         if (b & 0x80) == 0:
             yield n
-            n = 0; shift = 0
+            n = 0
+            shift = 0
         else:
             shift += 7
+
 
 def delta_encode(sorted_nums):
     """
@@ -113,6 +134,7 @@ def delta_encode(sorted_nums):
     for x in sorted_nums:
         yield x - prev
         prev = x
+
 
 def delta_decode(deltas):
     s = 0

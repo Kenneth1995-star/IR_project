@@ -1,14 +1,21 @@
-from tokenizer import Tokenizer
-from DocumentManager import DocumentManager
-from collections import defaultdict
-from typing import Optional, Any, Literal, Dict, List, Tuple, Iterable
-from functools import partial
-from Extras import vbyte_decode, vbyte_encode, delta_decode, delta_encode
-import msgpack, os, glob, io, mmap, sys
-import zstandard as zstd
-import marisa_trie
-import numpy as np
+import glob
+import io
 import math
+import mmap
+import os
+import sys
+from collections import defaultdict
+from functools import partial
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+import marisa_trie
+import msgpack
+import numpy as np
+import zstandard as zstd
+
+from DocumentManager import DocumentManager
+from Extras import delta_decode, delta_encode, vbyte_decode, vbyte_encode
+from Tokenizer import Tokenizer
 
 
 class Indexer:
@@ -19,27 +26,32 @@ class Indexer:
         self.posting_list = defaultdict(list)
 
         # Disk index
-        self.postings_path = os.path.join(self.path, "postings.bin") 
+        self.postings_path = os.path.join(self.path, "postings.bin")
         self.postings_fd = None
         self.mm = None
 
         # Disk lexicon
-        self._record_fmt = "<QII" # 8 + 4 + 4 bytes
+        self._record_fmt = "<QII"  # 8 + 4 + 4 bytes
         self.lexicon_path = os.path.join(self.path, "lexicon.marisa")
         self.trie = None
 
         # smart scheme offset map
         self.smart_offset_map = {
-            scheme: i for i, scheme in enumerate(a+b+"c" for b in "tnp" for a in "lnabL")
+            scheme: i
+            for i, scheme in enumerate(
+                a + b + "c" for b in "tnp" for a in "lnabL"
+            )
         }
 
     def build_index(self, filepaths, bytes_limit=50_000_000):
         """
-        SPIMI implementation for reverse indexing, storing term positions. 
+        SPIMI implementation for reverse indexing, storing term positions.
         """
-        
+
         # Term to Posting list, which consists of DocID to term positions
-        dictionary: Dict[Any, Dict[int, List[int]]] = defaultdict(partial(defaultdict, list))
+        dictionary: Dict[Any, Dict[int, List[int]]] = defaultdict(
+            partial(defaultdict, list)
+        )
 
         block_count = 0
         estimated_bytes = sys.getsizeof(dictionary)
@@ -57,7 +69,9 @@ class Indexer:
 
             while token := next(tokenstream, None):
                 # Increase estimation
-                estimated_bytes += 0 if token in dictionary else sys.getsizeof(token)
+                estimated_bytes += (
+                    0 if token in dictionary else sys.getsizeof(token)
+                )
                 estimated_bytes += sys.getsizeof(position)
                 posting_list = dictionary[token]
                 posting_list[doc_id].append(position)
@@ -71,21 +85,23 @@ class Indexer:
                     estimated_bytes = sys.getsizeof(dictionary)
                 position += 1
             self.manager.set_length(doc_id, position)
-        
+
         if dictionary:
             self._write_block(dictionary, block_count)
 
         self._merge_blocks()
-        self.manager.finalize(*self.compute_stats())
+        self.manager.finalize(*self._compute_stats())
+
+    # --- Getters --- #
+
+    def N(self) -> int:
+        return self.manager.N
 
     def get_doc_keys(self) -> List[str]:
         return self.manager.get_keys()
 
     def get_doc_ids(self) -> List[int]:
         return self.manager.get_values()
-
-    def N(self) -> int:
-        return self.manager.N
 
     def doc_mean(self) -> float:
         return self.manager.mean
@@ -113,30 +129,38 @@ class Indexer:
 
     def get_meta(self, term: str):
         """
-        Returns (off, length, df) or None.
+        Returns (offset, length, df) or None.
+        For retrieving postings, tf or df
         """
         res = self.trie.get(term)
         return res[0] if res else None
 
     def get_postings(self, term: str) -> List[Tuple[int, List[int]]]:
+        """
+        Load postings from disk
+        """
         meta = self.get_meta(term)
         if not meta:
             return []
         off, ln, _df = meta
-        raw = self.mm[off:off+ln]
+        raw = self.mm[off:off + ln]
         return self._decode_term_block(raw)
 
     def get_tfs(self, term: str) -> List[Tuple[int, int]]:
+        """
+        Load term frequencies without reading the whole postings
+        """
         meta = self.get_meta(term)
         if not meta:
             return []
         off, ln, _df = meta
-        raw = self.mm[off:off+ln]
+        raw = self.mm[off:off + ln]
         return self._decode_term_block(raw, False)
 
     def iter_prefix(self, prefix: str, limit: int = 50):
         """
         Predictive/prefix lookup for terms beginning with `prefix`.
+        Used with wildcard queries, but is not implemented.
         """
         count = 0
         for key in self.trie.iterkeys(prefix):
@@ -145,7 +169,11 @@ class Indexer:
             if count >= limit:
                 break
 
-    def compute_stats(self):
+    def _compute_stats(self):
+        """
+        Compute all document norms, lengths, averages, etc.
+        Useful as the index is static.
+        """
         # Traverse all terms twice: for max tf and for computing the stats
         N = self.N()
         max_tf = np.zeros(N, dtype=np.uint32)
@@ -160,7 +188,9 @@ class Indexer:
 
         avg_tf = np.zeros(self.N(), dtype=np.float32)
         nonzero_mask = unique_terms > 0
-        avg_tf[nonzero_mask] = sum_tf[nonzero_mask] / unique_terms[nonzero_mask]
+        avg_tf[nonzero_mask] = (
+            sum_tf[nonzero_mask] / unique_terms[nonzero_mask]
+        )
 
         # Calculate all variations of cosine norm
         # It's fine because index is static
@@ -168,7 +198,7 @@ class Indexer:
         norms = np.zeros((15, N), dtype=np.float32)
         for term, meta in self.trie.iteritems():
             df = meta[2]
-            if df <= 0 or df >= N: 
+            if df <= 0 or df >= N:
                 continue
             idf_t = math.log10(N / df)
             idf_p = max(0.0, math.log10((N - df) / df))
@@ -176,7 +206,9 @@ class Indexer:
                 tf_l = 1.0 + math.log10(tf)
                 tf_a = 0.5 + 0.5 * tf / max_tf[doc_id]
                 tf_b = 1.0 if tf > 0 else 0.0
-                tf_L = (1.0 + math.log10(tf)) / (1.0 + math.log10(avg_tf[doc_id]))
+                tf_L = (1.0 + math.log10(tf)) / (
+                    1.0 + math.log10(avg_tf[doc_id])
+                )
                 norms[0][doc_id] += (tf_l * idf_t) ** 2
                 norms[1][doc_id] += (tf * idf_t) ** 2
                 norms[2][doc_id] += (tf_a * idf_t) ** 2
@@ -192,7 +224,7 @@ class Indexer:
                 norms[12][doc_id] += (tf_a * idf_p) ** 2
                 norms[13][doc_id] += (tf_b * idf_p) ** 2
                 norms[14][doc_id] += (tf_L * idf_p) ** 2
-                
+
         norms = 1 / np.sqrt(norms)
         return max_tf, unique_terms, avg_tf, norms
 
@@ -201,12 +233,17 @@ class Indexer:
         Loads previously saved postings and lexicon file.
         """
         self.postings_fd = open(self.postings_path, "rb")
-        self.mm = mmap.mmap(self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ)
+        self.mm = mmap.mmap(
+            self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ
+        )
         self.trie = marisa_trie.RecordTrie(self._record_fmt)
         self.trie.mmap(self.lexicon_path)
         self.manager.load()
 
     def close(self):
+        """
+        Close open files
+        """
         self.mm.close()
         self.postings_fd.close()
 
@@ -216,31 +253,38 @@ class Indexer:
         Term by term writing allows for term by term reading
         """
         filepath = os.path.join(self.path, f"{0}-{block_id}.zst")
-        with open(filepath, "wb") as f, zstd.ZstdCompressor().stream_writer(f) as zf:
+        with open(filepath, "wb") as f, zstd.ZstdCompressor().stream_writer(
+            f
+        ) as zf:
             pack = msgpack.Packer().pack
             # Sort keys
             for term_id in sorted(dictionary.keys()):
                 postings = dictionary[term_id]
                 # Sorted by doc_id through insertion order
-                rec = (term_id, [(doc_id, postings[doc_id]) for doc_id in postings])
+                rec = (
+                    term_id,
+                    [(doc_id, postings[doc_id]) for doc_id in postings],
+                )
                 zf.write(pack(rec))
 
     def _read_block(self, filepath):
         """
-        Read a file written in _write_block or _merge_blocks, returning a generator.
-        File stream reduces memory usage.
+        Read a file written in _write_block or _merge_blocks,
+        returning a generator. File stream reduces memory usage.
         Yields:
             (term_id, postings), postings is a list of [doc_id, positions]
         """
-        with open(filepath, "rb") as f, zstd.ZstdDecompressor().stream_reader(f) as zf:
+        with open(filepath, "rb") as f, zstd.ZstdDecompressor().stream_reader(
+            f
+        ) as zf:
             unpacker = msgpack.Unpacker(zf)
             for term_id, postings in unpacker:
                 yield term_id, postings
 
     def _merge_postings(self, l_postings, r_postings):
         """
-        Merge 2 postings of the same term, concatinating positions of the same document.
-        Uses 2-pointer merge
+        Merge 2 postings of the same term, concatinating positions of the same
+        document. Uses 2-pointer merge
         Returns:
             The merged postings
         """
@@ -258,7 +302,7 @@ class Indexer:
                 out.append([l_doc, sorted(l_positions + r_positions)])
                 l_idx += 1
                 r_idx += 1
-            
+
             elif l_doc < r_doc:
                 out.append([l_doc, l_positions])
                 l_idx += 1
@@ -269,7 +313,7 @@ class Indexer:
 
         if l_idx < ln:
             out.extend(l_postings[l_idx:])
-        
+
         if r_idx < rn:
             out.extend(r_postings[r_idx:])
 
@@ -300,7 +344,9 @@ class Indexer:
 
             # 2 pointer merge
             outpath = os.path.join(self.path, f"{level}-{idx / 2}.zst")
-            with open(outpath, "wb") as f, zstd.ZstdCompressor().stream_writer(f) as zf:
+            with open(outpath, "wb") as f, zstd.ZstdCompressor().stream_writer(
+                f
+            ) as zf:
                 pack = msgpack.Packer().pack
 
                 # Keys are sorted
@@ -309,22 +355,31 @@ class Indexer:
                     r_id, r_postings = r_content
 
                     if l_id == r_id:
-                        zf.write(pack((l_id, self._merge_postings(l_postings, r_postings))))
+                        zf.write(
+                            pack(
+                                (
+                                    l_id,
+                                    self._merge_postings(
+                                        l_postings, r_postings
+                                    ),
+                                )
+                            )
+                        )
                         l_content = next(l_it, None)
                         r_content = next(r_it, None)
-                    
+
                     elif l_id < r_id:
                         zf.write(pack(l_content))
-                        l_content = next(l_it, None) 
-                    
+                        l_content = next(l_it, None)
+
                     else:
                         zf.write(pack(r_content))
                         r_content = next(r_it, None)
-                
+
                 while l_content:
                     zf.write(pack(l_content))
                     l_content = next(l_it, None)
-                    
+
                 while r_content:
                     zf.write(pack(r_content))
                     r_content = next(r_it, None)
@@ -334,10 +389,13 @@ class Indexer:
             idx += 2
         self._merge_blocks(level + 1)
 
-    def _encode_term_block(self, postings: List[Tuple[int, List[int]]]) -> bytes:
+    def _encode_term_block(
+        self, postings: List[Tuple[int, List[int]]]
+    ) -> bytes:
         """
-        postings: list of (doc_id, positions[]) with doc_ids sorted, positions sorted.
-        Stores docIDs and TFs upfront so scoring can skip the positions blob.
+        postings: list of (doc_id, positions[]) with doc_ids sorted, positions
+        sorted. Stores docIDs and TFs upfront so scoring can skip the
+        positions blob.
         """
         buf = io.BytesIO()
 
@@ -355,11 +413,11 @@ class Indexer:
 
         return buf.getvalue()
 
-
     def _decode_term_block(self, raw: bytes, include_positions: bool = True):
         """
-        If include_positions=True (default), returns List[(doc_id, positions[])].
-        If include_positions=False, returns List[(doc_id, tf)] and skips positions decoding.
+        If include_positions=True (default), returns
+        List[(doc_id, positions[])]. If include_positions=False,
+        returns List[(doc_id, tf)] and skips positions decoding.
         """
         it = iter(vbyte_decode(raw))
         num_docs = next(it)
@@ -388,8 +446,11 @@ class Indexer:
 
         return postings
 
-    def _build_marisa_lexicon(self, items: Iterable[Tuple[str, Tuple[int, int, int]]]):
+    def _build_marisa_lexicon(
+        self, items: Iterable[Tuple[str, Tuple[int, int, int]]]
+    ):
         """
+        Builds the lexicon with byte offset, and df.
         items: iterable of (term, off, length, df)
         """
         self.trie = marisa_trie.RecordTrie(self._record_fmt, items)
@@ -398,8 +459,8 @@ class Indexer:
 
     def _write_posting_bin(self, posting_stream):
         """
-        spimi_terms_to_postings must be sorted by term; each value is postings list.
-        Writes postings and lexicon files
+        spimi_terms_to_postings must be sorted by term; each value is postings
+        list. Writes postings and lexicon files
         """
         # Stream-write postings; collect (term, off, len, df) for lexicon
         meta: List[Tuple[str, Tuple[int, int, int]]] = []
@@ -419,26 +480,6 @@ class Indexer:
 
         # Make querying available
         self.postings_fd = open(self.postings_path, "rb")
-        self.mm = mmap.mmap(self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ)
-
-def filestream():
-    sample_dir = os.path.join("data", "wikipedia-movies")
-    # sample_dir = os.path.join("data", "sample_docs")
-    paths = sorted(glob.glob(os.path.join(sample_dir, "*")))
-    for path in paths:
-        yield path
-
-if __name__ == "__main__":
-    indexer = Indexer(path="index/")
-
-    indexer.build_index(filestream(), bytes_limit=2_000_000_000)
-    # indexer._merge_blocks()
-
-    # indexer.load()
-    print(indexer.get_meta("artificial"))
-    print(indexer.get_postings("artificial"))
-    print(vars(indexer))
-    print(vars(indexer.manager))
-    # gen = indexer.iter_prefix("ab")
-    # while x := next(gen, None):
-    #     print(x)
+        self.mm = mmap.mmap(
+            self.postings_fd.fileno(), 0, access=mmap.ACCESS_READ
+        )

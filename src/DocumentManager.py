@@ -1,8 +1,9 @@
-import numpy as np
-import marisa_trie
-import os
 import json
+import os
 from typing import List
+
+import marisa_trie
+import numpy as np
 
 
 class DocumentManager:
@@ -23,15 +24,21 @@ class DocumentManager:
         trie.save(self.ids_path)
         self.N = len(trie)
         self.lengths = np.zeros(self.N, dtype=np.uint32)
-        self.path_to_id = trie.mmap(self.ids_path) # mmap
+        self.path_to_id = trie.mmap(self.ids_path)  # mmap
         for key in self.path_to_id.keys():
             yield key
 
     def finalize(self, max_tf, unique_terms, floats, norms):
+        """
+        Store all document stats in files.
+        """
         self.mean = np.mean(self.lengths, dtype=np.float64)
 
         # 0: lengths, 1: max_tf, 2: unique_terms
-        np.save(self.ints_path, np.stack((self.lengths, max_tf, unique_terms), dtype=np.uint32))
+        np.save(
+            self.ints_path,
+            np.stack((self.lengths, max_tf, unique_terms), dtype=np.uint32),
+        )
 
         # avg_tf
         np.save(self.floats_path, floats)
@@ -39,19 +46,19 @@ class DocumentManager:
         # norms. 0: ltc, 14: Lpc [lnabL - tnp - c]
         np.save(self.norms_path, norms)
 
-        stats = {
-            "N": self.N, 
-            "mean": self.mean
-        }
+        stats = {"N": self.N, "mean": self.mean}
         with open(self.stats_path, "w", encoding="utf8") as f:
             json.dump(stats, f, ensure_ascii=False)
 
         self.load()
 
     def load(self):
+        """
+        Load all stored data
+        """
         self.path_to_id = marisa_trie.Trie().mmap(self.ids_path)
 
-        ints =  np.load(self.ints_path, mmap_mode="r")
+        ints = np.load(self.ints_path, mmap_mode="r")
         self.lengths = ints[0]
         self.max_tf = ints[1]
         self.unique_terms = ints[2]
@@ -65,6 +72,8 @@ class DocumentManager:
         self.N = stats["N"]
         self.mean = stats["mean"]
 
+    # --- Getters --- #
+
     def get_keys(self) -> List[str]:
         return self.path_to_id.keys()
 
@@ -76,7 +85,7 @@ class DocumentManager:
         Get all Doc ids in order
         """
         return list(range(self.N))
-    
+
     def get_id(self, key) -> int:
         return self.path_to_id.get(key)
 
@@ -93,7 +102,7 @@ class DocumentManager:
         with open(self.get_key(doc_id), "rb") as f:
             f.seek(0, 2)
             return f.tell()
-    
+
     def get_average_length(self) -> int:
         return self.mean
 
