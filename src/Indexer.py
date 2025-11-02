@@ -28,6 +28,11 @@ class Indexer:
         self.lexicon_path = os.path.join(self.path, "lexicon.marisa")
         self.trie = None
 
+        # smart scheme offset map
+        self.smart_offset_map = {
+            scheme: i for i, scheme in enumerate(a+b+"c" for b in "tnp" for a in "lnabL")
+        }
+
     def build_index(self, filepaths, bytes_limit=50_000_000):
         """
         SPIMI implementation for reverse indexing, storing term positions. 
@@ -88,6 +93,24 @@ class Indexer:
     def get_doc_length(self, doc_id) -> int:
         return self.manager.lengths[doc_id]
 
+    def get_max_tf(self, doc_id) -> int:
+        return self.manager.max_tf[doc_id]
+
+    def get_avg_tf(self, doc_id) -> float:
+        return self.manager.avg_tf[doc_id]
+
+    def get_unique_terms(self, doc_id: int) -> int:
+        return self.manager.unique_terms[doc_id]
+
+    def get_avg_unique(self) -> float:
+        return np.mean(self.manager.unique_terms)
+
+    def get_byte_length(self, doc_id: int) -> int:
+        return self.manager.get_byte_length(doc_id)
+
+    def get_norm(self, doc_id: int, scheme: str) -> float:
+        return self.manager.norms[self.smart_offset_map[scheme]][doc_id]
+
     def get_meta(self, term: str):
         """
         Returns (off, length, df) or None.
@@ -124,32 +147,54 @@ class Indexer:
 
     def compute_stats(self):
         # Traverse all terms twice: for max tf and for computing the stats
-        max_tf = np.zeros(self.N(), dtype=np.uint32)
+        N = self.N()
+        max_tf = np.zeros(N, dtype=np.uint32)
+        sum_tf = np.zeros(N, dtype=np.float32)
+        unique_terms = np.zeros(N, dtype=np.uint32)
         for term in self.trie.keys():
             for doc_id, tf in self.get_tfs(term):
                 if tf > max_tf[doc_id]:
                     max_tf[doc_id] = tf
+                sum_tf[doc_id] += tf
+                unique_terms[doc_id] += 1
 
-        ltc_norms = np.zeros(self.N(), dtype=np.float32)
-        ntc_norms = np.zeros(self.N(), dtype=np.float32)
-        lnc_norms = np.zeros(self.N(), dtype=np.float32)
-        atc_norms = np.zeros(self.N(), dtype=np.float32)
+        avg_tf = np.zeros(self.N(), dtype=np.float32)
+        nonzero_mask = unique_terms > 0
+        avg_tf[nonzero_mask] = sum_tf[nonzero_mask] / unique_terms[nonzero_mask]
+
+        # Calculate all variations of cosine norm
+        # It's fine because index is static
+        # lnabL - tnp - c, so 0: ltc, 14:Lpc
+        norms = np.zeros((15, N), dtype=np.float32)
         for term, meta in self.trie.iteritems():
             df = meta[2]
-            idf = math.log10(self.N() / df) # Guaranteed > 0, otherwise term doesn't exist
+            if df <= 0 or df >= N: 
+                continue
+            idf_t = math.log10(N / df)
+            idf_p = max(0.0, math.log10((N - df) / df))
             for doc_id, tf in self.get_tfs(term):
-                w_tf = 1.0 + math.log10(tf)
-                ltc_norms[doc_id] += (w_tf * idf) ** 2
-                ntc_norms[doc_id] += (tf * idf) ** 2
-                atc_norms[doc_id] += ((0.5 + 0.5 * (tf / max_tf[doc_id])) * idf) ** 2
-                lnc_norms[doc_id] += (w_tf) ** 2
-        
-        norms: np.ndarray = np.stack((ltc_norms, ntc_norms, atc_norms, lnc_norms))
+                tf_l = 1.0 + math.log10(tf)
+                tf_a = 0.5 + 0.5 * tf / max_tf[doc_id]
+                tf_b = 1.0 if tf > 0 else 0.0
+                tf_L = (1.0 + math.log10(tf)) / (1.0 + math.log10(avg_tf[doc_id]))
+                norms[0][doc_id] += (tf_l * idf_t) ** 2
+                norms[1][doc_id] += (tf * idf_t) ** 2
+                norms[2][doc_id] += (tf_a * idf_t) ** 2
+                norms[3][doc_id] += (tf_b * idf_t) ** 2
+                norms[4][doc_id] += (tf_L * idf_t) ** 2
+                norms[5][doc_id] += (tf_l) ** 2
+                norms[6][doc_id] += (tf) ** 2
+                norms[7][doc_id] += (tf_a) ** 2
+                norms[8][doc_id] += (tf_b) ** 2
+                norms[9][doc_id] += (tf_L) ** 2
+                norms[10][doc_id] += (tf_l * idf_p) ** 2
+                norms[11][doc_id] += (tf * idf_p) ** 2
+                norms[12][doc_id] += (tf_a * idf_p) ** 2
+                norms[13][doc_id] += (tf_b * idf_p) ** 2
+                norms[14][doc_id] += (tf_L * idf_p) ** 2
+                
         norms = 1 / np.sqrt(norms)
-        return max_tf, norms
-
-    def get_ltc(self):
-        return self.manager.get_norms()[0]
+        return max_tf, unique_terms, avg_tf, norms
 
     def load(self):
         """
@@ -378,6 +423,7 @@ class Indexer:
 
 def filestream():
     sample_dir = os.path.join("data", "wikipedia-movies")
+    # sample_dir = os.path.join("data", "sample_docs")
     paths = sorted(glob.glob(os.path.join(sample_dir, "*")))
     for path in paths:
         yield path
@@ -391,6 +437,7 @@ if __name__ == "__main__":
     # indexer.load()
     print(indexer.get_meta("artificial"))
     print(indexer.get_postings("artificial"))
+    print(vars(indexer))
     print(vars(indexer.manager))
     # gen = indexer.iter_prefix("ab")
     # while x := next(gen, None):

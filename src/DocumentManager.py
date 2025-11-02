@@ -11,6 +11,7 @@ class DocumentManager:
         self.ids_path = os.path.join(path, "docids.marisa")
         self.ints_path = os.path.join(path, "ints.npy")
         self.stats_path = os.path.join(path, "stats.json")
+        self.floats_path = os.path.join(path, "floats.npy")
         self.norms_path = os.path.join(path, "norms.npy")
 
     def initialize(self, filepaths):
@@ -30,12 +31,16 @@ class DocumentManager:
         for key in self.path_to_id.keys():
             yield key
 
-    def finalize(self, max_tf, norms):
+    def finalize(self, max_tf, unique_terms, floats, norms):
         self.mean = np.mean(self.lengths, dtype=np.float64)
 
-        # 0: lengths, 1: max_tf
-        np.save(self.ints_path, np.stack((self.lengths, max_tf), dtype=np.uint32))
+        # 0: lengths, 1: max_tf, 2: unique_terms
+        np.save(self.ints_path, np.stack((self.lengths, max_tf, unique_terms), dtype=np.uint32))
 
+        # avg_tf
+        np.save(self.floats_path, floats)
+
+        # norms. 0: ltc, 14: Lpc [lnabL - tnp - c]
         np.save(self.norms_path, norms)
 
         stats = {
@@ -53,6 +58,10 @@ class DocumentManager:
         ints =  np.load(self.ints_path, mmap_mode="r")
         self.lengths = ints[0]
         self.max_tf = ints[1]
+        self.unique_terms = ints[2]
+
+        self.avg_tf = np.load(self.floats_path, mmap_mode="r")
+
         self.norms = np.load(self.norms_path, mmap_mode="r")
 
         with open(self.stats_path, "r", encoding="utf8") as lf:
@@ -71,9 +80,6 @@ class DocumentManager:
         Get all Doc ids in order
         """
         return list(range(self.N))
-
-    def get_norms(self):
-        return self.norms
     
     def get_id(self, key) -> int:
         return self.path_to_id.get(key)
@@ -86,6 +92,11 @@ class DocumentManager:
 
     def get_length(self, doc_id: int) -> int:
         return self.lengths[doc_id]
+
+    def get_byte_length(self, doc_id: int) -> int:
+        with open(self.get_key(doc_id), "rb") as f:
+            f.seek(0, 2)
+            return f.tell()
     
     def get_average_length(self) -> int:
         return self.mean

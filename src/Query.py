@@ -4,7 +4,7 @@ QueryProcessor: efficient inverted-index based retrieval.
 
 Implements:
  - Boolean queries: AND, OR, NOT, parentheses (shunting-yard + merge ops)
- - Phrase queries: "exact phrase" (requires positional index in Indexer)
+ - Phrase queries: "exact phrase"
  - Ranked retrieval: TF-IDF cosine and BM25
 """
 from typing import List, Tuple, Optional, Any, Dict, Literal
@@ -13,8 +13,8 @@ import math
 import re
 
 from tokenizer import Tokenizer
-# from indexer import Indexer
 from Indexer import Indexer
+from Smart import DF_FUNCS, TF_FUNCS, NORM_FUNCS
 
 
 class QueryProcessor:
@@ -277,79 +277,137 @@ class QueryProcessor:
 
     # --- RANKED RETRIEVAL METHODS ---
 
-    # here we are computing TF-IDF cosine similarity ranking
-    def _rank_tfidf(self, q_tokens: List[str], candidate_docs: Optional[List[str]] = None, top_k: int = 10, 
-                    phrase_info: Dict[str, Any] = None) -> List[Tuple[str, float]]:
+    def _smart_ranking(self, q_tokens: List[str], scheme: str, candidate_docs: Optional[List[str]] = None, 
+                       top_k: int = 10, phrase_info: Dict[str, Any] = None) -> List[Tuple[str, float]]:
         """
-        Rank documents by tf idf. Phrase info contains tf and df of phrase tokens,
-        candidate docs for boolean search
+        TF-IDF ranking with smart variations. Candidate_docs from boolean search. Phrase info contains tf and df of phrases
+        in the query. Using prob idf, one might get no ranking, even if the terms appear in the documents. This is by design.
+        N - df_t / df_t
         """
+        d_t = TF_FUNCS[scheme[0]]
+        d_d = DF_FUNCS[scheme[1]]
+        d_n = NORM_FUNCS[scheme[2]]
+
+        q_t = TF_FUNCS[scheme[4]]
+        q_d = DF_FUNCS[scheme[5]]
+        q_n = NORM_FUNCS[scheme[6]]
+
+        if not q_tokens:
+            return []
+
         # Query tf
         q_tf = defaultdict(int)
         for t in q_tokens:
             q_tf[t] += 1
+
+        var_q = None
+        if scheme[4] == "a":
+            var_q = max(q_tf.values())
+        elif scheme[4] == "L":
+            var_q = sum(q_tf.values()) / len(q_tf)
             
         # Query weights and idf
+        N = self.indexer.N()
         idf = dict()
         q_weights = {}
         for t, f in q_tf.items():
             # df of term
             if t in phrase_info:
-                # previously calculated df
+                # phrase dfs are precomputed
                 df_t = phrase_info[t][1]
-                if df_t <= 0:
-                    continue
             else:
-                df_t = self.indexer.get_meta(t)
-                if df_t is None:
+                meta = self.indexer.get_meta(t) 
+                if meta is None:
                     continue
-                df_t = df_t[2]
-            idf_t = math.log10(self.indexer.N() / df_t)
-            if idf_t <= 0:
-                continue
-            idf[t] = idf_t
-            q_weights[t] = (1.0 + math.log10(f)) * idf_t
+                df_t = meta[2]
 
-        q_norm = math.sqrt(sum(w*w for w in q_weights.values()))
+            if df_t <= 0:
+                continue
+
+            idf_t_d = d_d(df=df_t, N=N)
+            if idf_t_d <= 0:
+                continue
+            idf[t] = idf_t_d
+
+            idf_t_q = q_d(df=df_t, N=N)
+            if idf_t_q <= 0:
+                continue
+
+            q_weights[t] = q_t(tf=f, var=var_q) * idf_t_q
+
+        if not q_weights:
+            return []
+
+        # Normalize query
+        second, third = None, None
+        if scheme[6] == "u":
+            # unique count and avg unique
+            second = len(set(q_tokens))
+            third = self.indexer.get_avg_unique()
+        elif scheme[6] == "b":
+            # byte length
+            second = len("".join(q_tokens).encode("utf-8"))
+
+        q_norm = q_n(first=q_weights.values(), second=second, third=third)
         if q_norm == 0.0:
             return []
 
+        # Scoring
         scores = defaultdict(float)
+
         # Dot product between query and document vectors
         for t, q_w in q_weights.items():
             if t in phrase_info:
                 tfs = phrase_info[t][0]
             else:
                 tfs = self.indexer.get_tfs(t)
-            if candidate_docs:
-                tfs = {key: value for key, value in tfs}
-                for d in candidate_docs:
-                    # d not guaranteed in tfs with OR operator
-                    if d in tfs:
-                        dw = tfs[d] # tf
-                        dw = 1 + math.log10(dw)
-                        dw *= idf[t]
-                    else:
-                        dw = 0
-                    if dw:
-                        scores[d] += q_w * dw
-            else:
-                for d, tf in tfs:
-                    dw = 1 + math.log10(tf)
-                    dw *= idf[t]
-                    if dw:
-                        scores[d] += q_w * dw
+            tfs = dict(tfs)
+            docs = candidate_docs if candidate_docs else tfs.keys()
+            for d in docs:
+                # per-doc var for 'a' or 'L'
+                if scheme[0] == "a":
+                    var_d = self.indexer.get_max_tf(d)
+                elif scheme[0] == "L":
+                    var_d = self.indexer.get_avg_tf(d)
+                else:
+                    var_d = None
 
-        # Cosine
+                tf_d = tfs.get(d, 0)
+                if tf_d == 0:
+                    continue
+
+                dw = d_t(tf=tf_d, var=var_d) * idf[t]       # doc-side weight for term t in doc d
+                if dw == 0:
+                    continue
+
+                scores[d] += q_w * dw
+
+        if not scores:
+            return []
+
+        # query normalization also uses this
+        if scheme[2] == "u" and scheme[6] != "u":
+            third = self.indexer.get_avg_unique()
+
+        # Normalization
         final = []
         for d, dot in scores.items():
-            inverse_doc_norm = self.indexer.get_ltc()[d]
+            # inverse_doc_norm = self.indexer.get_ltc()[d]
+            if scheme[2] == "u":
+                second = self.indexer.get_unique_terms(d)
+            elif scheme[2] == "b":
+                second : self.indexer.get_byte_length(d)
+
+            # Only cosine uses first
+            inverse_doc_norm = d_n(first=[1.0], second=second, third=third)
+            if scheme[2] == "c":
+                inverse_doc_norm = self.indexer.get_norm(d, scheme[:3])
+
             if inverse_doc_norm > 0:
-                final.append((d, dot * inverse_doc_norm / q_norm))
+                final.append((d, float(dot * inverse_doc_norm * q_norm))) # inversed norm
         final.sort(key=lambda x: x[1], reverse=True)
         return final[:top_k]
 
-    # here we are implementing BM25 ranking (a more advanced probabilistic scoring method)
     def _rank_bm25(self, q_tokens: List[str], candidate_docs: Optional[List[str]] = None, 
                    top_k: int = 10, phrase_info: Dict[str, Any] = None, k1: float = 1.5, 
                    k3: float = 1.5, b: float = 0.75) -> List[Tuple[str, float]]:
@@ -396,7 +454,8 @@ class QueryProcessor:
     # --- PUBLIC SEARCH FUNCTION ---
 
     # here we are defining the main search() function that users will call
-    def search(self, query: str, top_k: int = 10, method: Literal["tfidf", "bm25"] = "tfidf"):
+    def search(self, query: str, top_k: int = 10, method: Literal["tfidf", "bm25"] = "tfidf",
+               scheme: str = "ltc.ltc"):
         """
         Main search function. Accepts boolean / phrase / normal queries. 
         Methods implemented: TF-IDF, BM25. 
@@ -431,7 +490,7 @@ class QueryProcessor:
                 return []
         
         if method == "tfidf":
-            ranked = self._rank_tfidf(q_tokens, candidates, top_k, phrase_info)
+            ranked = self._smart_ranking(q_tokens, scheme, candidates, top_k, phrase_info)
         else:
             ranked = self._rank_bm25(q_tokens, candidates, top_k, phrase_info)
         return [(d, s) for d, s in ranked]
@@ -483,6 +542,13 @@ if __name__ == "__main__":
         "SHADOWLESS AND CHARIZARD",
         "100-meters pokémon"
     ]
+    # schemes = [a+b+c for c in "ncub" for b in "ntp" for a in "nlabL"]
+    # for qqq in schemes:
+    #     for ddd in schemes:
+    #         print(f"{ddd}.{qqq}")
+    #         for x in l:
+    #             print(query.search(x, method="tfidf", scheme=f"{ddd}.{qqq}"))
+
 
     for x in l:
-        print(query.search(x, method="bm25"))
+        print(query.search(x, method="tfidf", scheme=f"lpb.Ltb"))
