@@ -78,8 +78,6 @@ class Indexer:
         self._merge_blocks()
         self.manager.finalize(*self.compute_stats())
 
-<<<<<<< HEAD
-=======
     def get_doc_keys(self) -> List[str]:
         return self.manager.get_keys()
 
@@ -113,7 +111,6 @@ class Indexer:
     def get_norm(self, doc_id: int, scheme: str) -> float:
         return self.manager.norms[self.smart_offset_map[scheme]][doc_id]
 
->>>>>>> ba6744e4
     def get_meta(self, term: str):
         """
         Returns (off, length, df) or None.

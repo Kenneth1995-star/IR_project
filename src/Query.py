@@ -551,4 +551,4 @@ if __name__ == "__main__":
 
 
     for x in l:
-        print(query.search(x, method="tfidf", scheme=f"lpb.Ltb"))
+        print(query.search(x, method="bm25", scheme=f"lpb.Ltb"))

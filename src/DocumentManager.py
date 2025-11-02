@@ -2,6 +2,7 @@ import numpy as np
 import marisa_trie
 import os
 import json
+from typing import List
 
 
 class DocumentManager:
@@ -63,8 +64,6 @@ class DocumentManager:
             stats = json.load(lf)
         self.N = stats["N"]
         self.mean = stats["mean"]
-<<<<<<< HEAD
-=======
 
     def get_keys(self) -> List[str]:
         return self.path_to_id.keys()
@@ -77,7 +76,6 @@ class DocumentManager:
         Get all Doc ids in order
         """
         return list(range(self.N))
->>>>>>> ba6744e4
     
     def get_id(self, key) -> int:
         return self.path_to_id.get(key)

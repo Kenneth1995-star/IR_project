@@ -261,19 +261,11 @@ class QueryProcessor:
         return final[:top_k]
 
     # here we are implementing BM25 ranking (a more advanced probabilistic scoring method)
-<<<<<<< HEAD
-    def _rank_bm25(self, q_tokens: List[str], candidate_docs: Optional[List[str]] = None, top_k: int = 10) -> List[Tuple[str, float]]:
-        k1 = 1.5
-        b = 0.75
-        N = self.indexer.N
-        avgdl = self.indexer.avg_doc_len if self.indexer.avg_doc_len > 0 else 1.0
-=======
     def _rank_bm25(self, q_tokens: List[str], candidate_docs: Optional[List[str]] = None, top_k: int = 10,
                    k1: float = 1.5, k3: float = 1.5, b: float = 0.75) -> List[Tuple[str, float]]:
         N = self.indexer.N()
         # avgdl = self.indexer.avg_doc_len if self.indexer.avg_doc_len > 0 else 1.0
         avgdl = self.indexer.doc_mean()
->>>>>>> ba6744e4
         q_tf = defaultdict(int)
         for t in q_tokens:
             q_tf[t] += 1
@@ -368,25 +360,3 @@ class QueryProcessor:
         if e < len(text):
             snippet = snippet + "..."
         return snippet
-
-
-<<<<<<< HEAD
-=======
-if __name__ == "__main__":
-    indexer = Indexer(path="index2/")
-    indexer.load()
-    query = QueryProcessor(indexer)
-
-    l = [
-        # "3million",
-        # "pokémon",
-        # "\"security footage\"",
-        # "\"shadowless charizard\"",
-        # "charizard AND shadowless",
-        # "information retrieval",
-        "\"machine learning\""
-    ]
-
-    for x in l:
-        print(query.search(x, method="bm25"))
->>>>>>> ba6744e4
