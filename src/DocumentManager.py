@@ -8,8 +8,10 @@ class DocumentManager:
     def __init__(self, path="index/"):
         self.path = path
         self.ids_path = os.path.join(path, "docids.marisa")
-        self.lengths_path = os.path.join(path, "doclengths.npy")
+        self.ints_path = os.path.join(path, "ints.npy")
         self.stats_path = os.path.join(path, "stats.json")
+        self.floats_path = os.path.join(path, "floats.npy")
+        self.norms_path = os.path.join(path, "norms.npy")
 
     def initialize(self, filepaths):
         """
@@ -24,22 +26,58 @@ class DocumentManager:
         for key in self.path_to_id.keys():
             yield key
 
-    def finalize(self):
+    def finalize(self, max_tf, unique_terms, floats, norms):
         self.mean = np.mean(self.lengths, dtype=np.float64)
-        np.save(self.lengths_path, self.lengths_path)
-        self.lengths = np.load(self.lengths_path, mmap_mode="r")
 
+        # 0: lengths, 1: max_tf, 2: unique_terms
+        np.save(self.ints_path, np.stack((self.lengths, max_tf, unique_terms), dtype=np.uint32))
+
+        # avg_tf
+        np.save(self.floats_path, floats)
+
+        # norms. 0: ltc, 14: Lpc [lnabL - tnp - c]
+        np.save(self.norms_path, norms)
+
+        stats = {
+            "N": self.N, 
+            "mean": self.mean
+        }
         with open(self.stats_path, "w", encoding="utf8") as f:
-            json.dump({"N": self.N, "mean": self.mean}, f, ensure_ascii=False)
+            json.dump(stats, f, ensure_ascii=False)
+
+        self.load()
 
     def load(self):
         self.path_to_id = marisa_trie.Trie().mmap(self.ids_path)
-        self.lengths = np.load(self.lengths_path, mmap_mode="r")
+
+        ints =  np.load(self.ints_path, mmap_mode="r")
+        self.lengths = ints[0]
+        self.max_tf = ints[1]
+        self.unique_terms = ints[2]
+
+        self.avg_tf = np.load(self.floats_path, mmap_mode="r")
+
+        self.norms = np.load(self.norms_path, mmap_mode="r")
 
         with open(self.stats_path, "r", encoding="utf8") as lf:
             stats = json.load(lf)
         self.N = stats["N"]
         self.mean = stats["mean"]
+<<<<<<< HEAD
+=======
+
+    def get_keys(self) -> List[str]:
+        return self.path_to_id.keys()
+
+    def get_key(self, doc_id: int) -> str:
+        return self.path_to_id.restore_key(doc_id)
+
+    def get_values(self) -> List[int]:
+        """
+        Get all Doc ids in order
+        """
+        return list(range(self.N))
+>>>>>>> ba6744e4
     
     def get_id(self, key) -> int:
         return self.path_to_id.get(key)
@@ -52,6 +90,11 @@ class DocumentManager:
 
     def get_length(self, doc_id: int) -> int:
         return self.lengths[doc_id]
+
+    def get_byte_length(self, doc_id: int) -> int:
+        with open(self.get_key(doc_id), "rb") as f:
+            f.seek(0, 2)
+            return f.tell()
     
     def get_average_length(self) -> int:
         return self.mean
