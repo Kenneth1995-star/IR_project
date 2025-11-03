@@ -1,4 +1,4 @@
-# Information Retrieval System (IR Project)
+# Document Search and Ranked Retrieval
 
 ### Course Project — University of Antwerp
 
