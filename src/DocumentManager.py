@@ -1,3 +1,9 @@
+# src/DocumentManager.py
+"""
+Class that handles document I/O,
+and stores various statistics of
+each document.
+"""
 import json
 import os
 from typing import List
@@ -107,6 +113,8 @@ class DocumentManager:
         return self.mean
 
     def read_document_stream(self, filepath):
+        if os.path.isdir(filepath):
+            return
         with open(filepath, "r") as f:
             for line in f:
                 yield line

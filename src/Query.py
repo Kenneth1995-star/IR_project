@@ -145,7 +145,8 @@ class QueryProcessor:
 
     def _shunting_yard(self, tokens: List[str]) -> List[str]:
         """
-        Boolean query evaluation using shunting yard, converting to RPN
+        Boolean query evaluation using shunting yard, converting to RPN.
+        Throws ValueError if query is not positive.
         """
         if not tokens:
             return []

@@ -251,7 +251,8 @@ class Indexer:
                 norms[13][doc_id] += (tf_b * idf_p) ** 2
                 norms[14][doc_id] += (tf_L * idf_p) ** 2
 
-        norms = 1 / np.sqrt(norms)
+        eps = 1e-12  # avoid 0 division
+        norms = 1 / np.sqrt(norms + eps)
         return max_tf, unique_terms, avg_tf, norms
 
     def _write_block(self, dictionary, block_id: int) -> None:
